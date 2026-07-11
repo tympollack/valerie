@@ -151,40 +151,27 @@ export function WordTooltip({
   // ---------------------------------------------------------------------------
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>
-        {/* Render as an inline <span> so it doesn't break prose flow */}
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label={`Learn what "${word}" means`}
-          aria-haspopup="dialog"
-          aria-expanded={isOpen}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              handleOpenChange(!isOpen);
-            }
-          }}
-          className={cn(
-            // Styling: dotted underline signals "clickable glossary term"
-            // Primary color tint makes it subtle but distinct from regular links
-            "inline-flex cursor-pointer items-baseline gap-[2px]",
-            "text-primary underline decoration-dotted decoration-primary/50",
-            "underline-offset-2 transition-colors hover:decoration-primary",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-            "rounded-sm",
-            className,
-          )}
+      <PopoverTrigger
+        className={cn(
+          // Styling: dotted underline signals "clickable glossary term"
+          // Primary color tint makes it subtle but distinct from regular links
+          "inline-flex cursor-pointer items-baseline gap-[2px]",
+          "text-primary underline decoration-dotted decoration-primary/50",
+          "underline-offset-2 transition-colors hover:decoration-primary",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "rounded-sm",
+          className,
+        )}
+        aria-label={`Learn what "${word}" means`}
+      >
+        {children}
+        {/* Superscript "?" badge — signals interactivity without cluttering prose */}
+        <sup
+          aria-hidden="true"
+          className="text-[9px] font-bold text-primary/60 leading-none"
         >
-          {children}
-          {/* Superscript "?" badge — signals interactivity without cluttering prose */}
-          <sup
-            aria-hidden="true"
-            className="text-[9px] font-bold text-primary/60 leading-none"
-          >
-            ?
-          </sup>
-        </span>
+          ?
+        </sup>
       </PopoverTrigger>
 
       <PopoverContent

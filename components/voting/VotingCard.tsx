@@ -335,7 +335,10 @@ export function VotingCard({ pollId, questionText }: VotingCardProps) {
         <div className="px-1 space-y-1.5">
           <Slider
             value={[confidence]}
-            onValueChange={([val]) => setConfidence(val)}
+            onValueChange={(value) => {
+              const val = Array.isArray(value) ? value[0] : value;
+              if (typeof val === "number") setConfidence(val);
+            }}
             min={0}
             max={100}
             step={1}
