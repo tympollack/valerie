@@ -117,7 +117,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       // locked_until is intentionally NOT set here — the DB default
       // (NOW() + INTERVAL '24 hours') owns this value to prevent tampering.
     })
-    .select("locked_until")
+    .select("id, locked_until")
     .single();
 
   if (insertError) {
@@ -138,6 +138,22 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     };
   }
 
+  // --- Dynamic Topic Clustering Trigger (Asynchronous Post-Commit)
+  supabase.functions
+    .invoke("valerie-cluster-engine", {
+      body: {
+        poll_id:          pollId,
+        response_id:      data?.id,
+        user_id:          user.id,
+        likert_score:     likertScore,
+        confidence_score: confidenceScore,
+        comment:          comment?.trim() || undefined,
+      },
+    })
+    .catch((err) => {
+      console.warn("[Project Valerie] Background cluster invocation non-blocking warning:", err);
+    });
+
   // Bust any cached rendering of the poll results page
   revalidatePath(`/polls/${pollId}`);
 
@@ -146,3 +162,4 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     lockedUntil: data.locked_until,   // ISO 8601 timestamp from DB
   };
 }
+
