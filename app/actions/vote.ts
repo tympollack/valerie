@@ -45,6 +45,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake";
 import { revalidatePath } from "next/cache";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,15 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
 
   if (authError || !user) {
     return { success: false, error: "You must be signed in to vote." };
+  }
+
+  // --- Anti-Sybil Verification check (Defense-in-depth before DB RLS hard gate)
+  const antiSybilProof = extractAntiSybilProof(user);
+  if (!antiSybilProof.isHuman || antiSybilProof.trustState !== "active") {
+    return {
+      success: false,
+      error: "Single-human identity verification required. Please complete verification on the SunShade Hub.",
+    };
   }
 
   const { pollId, likertScore, confidenceScore, comment, h3HexIndex } = payload;
@@ -127,6 +137,14 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       return {
         success: false,
         error: "You have already voted on this poll. Each account may vote once.",
+      };
+    }
+
+    // PostgreSQL error code 42501 = insufficient_privilege (RLS policy check failed)
+    if (insertError.code === "42501") {
+      return {
+        success: false,
+        error: "Vote rejected: Your account must have active human verification.",
       };
     }
 
