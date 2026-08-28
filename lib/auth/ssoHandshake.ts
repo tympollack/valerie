@@ -18,7 +18,7 @@ export type VerificationTier =
   | "BIOMETRIC"
   | "GOVERNMENT_ID"
   | "VERIFIED"
-  | (string & {});
+  | string;
 
 export type TrustState = "active" | "quarantined" | "slashed";
 
@@ -308,23 +308,23 @@ export function extractAntiSybilProof(userOrPayload: unknown): AntiSybilProof {
     undefined
   ) as HumanProofDetails | undefined;
 
-  const nullifierHash =
-    humanProof?.nullifierHash ||
-    humanProof?.nullifier_hash ||
-    (appMeta.nullifier_hash as string) ||
-    (record.nullifier_hash as string);
+  const nullifierHash: string | undefined =
+    (typeof humanProof?.nullifierHash === "string" ? humanProof.nullifierHash : undefined) ??
+    (typeof humanProof?.nullifier_hash === "string" ? humanProof.nullifier_hash : undefined) ??
+    (typeof appMeta.nullifier_hash === "string" ? appMeta.nullifier_hash : undefined) ??
+    (typeof record.nullifier_hash === "string" ? record.nullifier_hash : undefined);
 
-  const provider =
-    humanProof?.provider ||
-    (appMeta.proof_provider as string) ||
-    (record.proof_provider as string);
+  const provider: string | undefined =
+    (typeof humanProof?.provider === "string" ? humanProof.provider : undefined) ??
+    (typeof appMeta.proof_provider === "string" ? appMeta.proof_provider : undefined) ??
+    (typeof record.proof_provider === "string" ? record.proof_provider : undefined);
 
-  const verifiedAt =
-    humanProof?.verifiedAt ||
-    humanProof?.verified_at ||
-    (appMeta.verified_at as string);
+  const verifiedAt: string | undefined =
+    (typeof humanProof?.verifiedAt === "string" ? humanProof.verifiedAt : undefined) ??
+    (typeof humanProof?.verified_at === "string" ? humanProof.verified_at : undefined) ??
+    (typeof appMeta.verified_at === "string" ? appMeta.verified_at : undefined);
 
-  const score =
+  const score: number | undefined =
     typeof humanProof?.score === "number"
       ? humanProof.score
       : typeof appMeta.trust_score === "number"
