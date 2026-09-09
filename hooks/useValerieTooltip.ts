@@ -2,6 +2,12 @@
 
 import { useState, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import {
+  hashTerm,
+  computeSha256,
+  tooltipCache,
+  LRUCache,
+} from "@/lib/cache/hashLookup";
 
 export type TooltipSource = "cache" | "gemini" | "openai" | "ai-fallback" | null;
 
@@ -9,11 +15,13 @@ export interface TooltipData {
   definition: string;
   source: TooltipSource;
   hashKey: string;
+  similarity?: number;
 }
 
 export interface UseValerieTooltipOptions {
   language?: string;
-  readingLevel?: string;
+  readingLevel?: string | number;
+  embedding?: number[];
 }
 
 export interface ValerieTooltipState {
@@ -24,31 +32,30 @@ export interface ValerieTooltipState {
   error: string | null;
 }
 
-// In-memory client-side cache across component instances
-const CLIENT_MEMORY_CACHE = new Map<string, TooltipData>();
+// Export calculateSha256 for backward compatibility with existing tests
+export const calculateSha256 = computeSha256;
+
+// In-memory client-side cache across component instances (backed by bounded LRU cache)
+export const CLIENT_MEMORY_CACHE = tooltipCache;
 
 /**
- * Computes client-side SHA-256 hash in hexadecimal.
+ * Generates a deterministic normalized 1536-D vector for text when an external
+ * embedding model is not yet loaded on the client.
  */
-export async function calculateSha256(text: string): Promise<string> {
-  if (typeof window === "undefined" || !window.crypto?.subtle) {
-    // Basic fallback for non-crypto environments
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) {
-      hash = (hash << 5) - hash + text.charCodeAt(i);
-      hash |= 0;
-    }
-    return Math.abs(hash).toString(16).padStart(16, "0");
+export function generateDeterministicEmbedding(text: string): number[] {
+  const dim = 1536;
+  const vec = new Array(dim).fill(0);
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    const idx = (i * 37 + code * 17) % dim;
+    vec[idx] = (vec[idx] + code / 255) % 1;
   }
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text.trim().toLowerCase());
-  const hashBuffer = await window.crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
+  return vec.map((v) => Number((v / norm).toFixed(6)));
 }
 
 export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
-  const { language = "en", readingLevel = "general" } = options;
+  const { language = "en", readingLevel = "general", embedding } = options;
 
   const [state, setState] = useState<ValerieTooltipState>({
     isLoading: false,
@@ -61,16 +68,16 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
   const activeRequestRef = useRef<string | null>(null);
 
   const fetchTooltip = useCallback(
-    async (word: string): Promise<TooltipData | null> => {
+    async (word: string, customEmbedding?: number[]): Promise<TooltipData | null> => {
       const cleanWord = word.trim();
       if (!cleanWord) return null;
 
-      const cacheKeyInput = `${cleanWord.toLowerCase()}:${language}:${readingLevel}`;
-      const hashKey = await calculateSha256(cacheKeyInput);
+      // 1. Calculate client-side SHA-256 hash using WebCrypto
+      const hashKey = await hashTerm(cleanWord, readingLevel, language);
 
-      // 1. Check in-memory client cache
-      if (CLIENT_MEMORY_CACHE.has(hashKey)) {
-        const cached = CLIENT_MEMORY_CACHE.get(hashKey)!;
+      // 2. Query in-memory LRU cache first (instant sub-10ms response)
+      if (tooltipCache.has(hashKey)) {
+        const cached = tooltipCache.get(hashKey)!;
         setState({
           isLoading: false,
           definition: cached.definition,
@@ -89,13 +96,14 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
       }));
       activeRequestRef.current = hashKey;
 
-      // 2. Direct Supabase content_cache lookup
+      const supabase = createClient();
+
+      // 3. Exact match lookup in valerie.content_cache (original_text_hash = hashKey)
       try {
-        const supabase = createClient();
         const { data: dbRow } = await supabase
           .schema("valerie")
           .from("content_cache")
-          .select("cached_translation")
+          .select("cached_translation, original_text_hash")
           .eq("original_text_hash", hashKey)
           .maybeSingle();
 
@@ -103,9 +111,9 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
           const result: TooltipData = {
             definition: dbRow.cached_translation,
             source: "cache",
-            hashKey,
+            hashKey: dbRow.original_text_hash || hashKey,
           };
-          CLIENT_MEMORY_CACHE.set(hashKey, result);
+          tooltipCache.set(hashKey, result);
 
           if (activeRequestRef.current === hashKey) {
             setState({
@@ -119,34 +127,135 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
           return result;
         }
       } catch {
-        // Fall through to API endpoint
+        // Fall through to semantic cache check
       }
 
-      // 3. Fallback to API / Edge Function simplify-word
+      // 4. On exact cache miss, invoke RPC valerie.match_semantic_cache(p_embedding, p_threshold => 0.96)
       try {
-        const res = await fetch("/api/simplify-word", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            word: cleanWord,
-            targetLanguage: language,
-            targetReadingLevel: readingLevel,
-          }),
-        });
+        const queryVector =
+          customEmbedding || embedding || generateDeterministicEmbedding(cleanWord);
 
-        const data = await res.json();
+        // Call RPC match_semantic_cache with threshold 0.96
+        const rpcCall = (supabase as any).schema
+          ? supabase.schema("valerie").rpc("match_semantic_cache", {
+              p_embedding: queryVector,
+              p_threshold: 0.96,
+            })
+          : supabase.rpc("match_semantic_cache", {
+              p_embedding: queryVector,
+              p_threshold: 0.96,
+            });
 
-        if (!res.ok || data.error) {
-          throw new Error(data.error || `HTTP ${res.status}`);
+        const { data: semanticRows, error: rpcError } = await rpcCall;
+
+        if (!rpcError && semanticRows) {
+          const match = Array.isArray(semanticRows) ? semanticRows[0] : semanticRows;
+          if (
+            match?.cached_translation &&
+            (match.similarity === undefined || match.similarity >= 0.96)
+          ) {
+            const result: TooltipData = {
+              definition: match.cached_translation,
+              source: "cache",
+              hashKey: match.original_text_hash || hashKey,
+              similarity: match.similarity,
+            };
+            tooltipCache.set(hashKey, result);
+
+            if (activeRequestRef.current === hashKey) {
+              setState({
+                isLoading: false,
+                definition: result.definition,
+                source: "cache",
+                hashKey,
+                error: null,
+              });
+            }
+            return result;
+          }
+        }
+      } catch {
+        // Semantic RPC unavailable; fall through to Edge Function
+      }
+
+      // 5. If both fail, trigger simplify-word Edge Function or API route
+      try {
+        let definition: string | null = null;
+        let source: TooltipSource = "ai-fallback";
+        let returnedHash: string = hashKey;
+
+        // Try Supabase Functions client first if available
+        if (supabase.functions?.invoke) {
+          try {
+            const { data: funcData, error: funcError } = await supabase.functions.invoke(
+              "simplify-word",
+              {
+                body: {
+                  word: cleanWord,
+                  targetLanguage: language,
+                  targetReadingLevel: String(readingLevel),
+                },
+              }
+            );
+            if (!funcError && funcData?.definition) {
+              definition = funcData.definition;
+              source = funcData.source || "ai-fallback";
+              returnedHash = funcData.hashKey || hashKey;
+            }
+          } catch {
+            // Fall through to Next.js API route
+          }
+        }
+
+        // Fallback to Next.js API route /api/simplify-word
+        if (!definition) {
+          const res = await fetch("/api/simplify-word", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              word: cleanWord,
+              targetLanguage: language,
+              targetReadingLevel: String(readingLevel),
+            }),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok || data.error) {
+            throw new Error(data.error || `HTTP ${res.status}`);
+          }
+
+          definition = data.definition;
+          source = data.source || "ai-fallback";
+          returnedHash = data.hashKey || hashKey;
         }
 
         const result: TooltipData = {
-          definition: data.definition,
-          source: data.source || "ai-fallback",
-          hashKey: data.hashKey || hashKey,
+          definition: definition!,
+          source,
+          hashKey: returnedHash,
         };
 
-        CLIENT_MEMORY_CACHE.set(hashKey, result);
+        // Save to in-memory LRU cache
+        tooltipCache.set(hashKey, result);
+
+        // Attempt write-back to valerie.content_cache
+        try {
+          await supabase
+            .schema("valerie")
+            .from("content_cache")
+            .upsert(
+              {
+                original_text_hash: hashKey,
+                target_language: language,
+                target_reading_level: String(readingLevel),
+                cached_translation: definition!,
+              },
+              { onConflict: "original_text_hash,target_language,target_reading_level" }
+            );
+        } catch {
+          // Ignore cache write error on client
+        }
 
         if (activeRequestRef.current === hashKey) {
           setState({
@@ -172,7 +281,7 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
         return null;
       }
     },
-    [language, readingLevel]
+    [language, readingLevel, embedding]
   );
 
   return {
