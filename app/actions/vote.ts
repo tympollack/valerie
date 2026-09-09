@@ -181,3 +181,9 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
   };
 }
 
+/**
+ * Server Action alias matching task specification:
+ * castVote({ pollId, likertScore, confidenceScore, comment })
+ */
+export const castVote = submitVote;
+

@@ -19,7 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ValerieTooltip } from "@/components/valerie/ValerieTooltip";
 import { RevealGate, type BivariateVote } from "@/components/valerie/RevealGate";
-import { submitVote } from "@/app/actions/vote";
+import { castVote, submitVote } from "@/app/actions/vote";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -204,7 +204,7 @@ export function BivariatePollCard({
 
     startTransition(async () => {
       try {
-        const result = await submitVote({
+        const result = await castVote({
           pollId,
           likertScore,
           confidenceScore,
