@@ -44,6 +44,7 @@ export interface ClusterEngineRequest {
   variance_tolerance?: number; // default 0.35
   split_delta?: number;        // default 0.35
   manual_vector?: number[];    // optional override for testing/direct embeddings
+  async_dispatch?: boolean;
 }
 
 export interface ClusterRecord {
@@ -133,6 +134,63 @@ export async function generateSentimentVector(
     req.confidence_score,
     VECTOR_DIM
   );
+}
+
+/**
+ * Infers initial descriptive titles for bifurcated child clusters using LLM,
+ * with deterministic taxonomy fallback.
+ */
+export async function inferClusterTitles(
+  parentName: string,
+  comment?: string,
+  questionText?: string,
+  openAiApiKey?: string
+): Promise<{ titleA: string; titleB: string }> {
+  if (openAiApiKey) {
+    try {
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openAiApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a civic polling cluster taxonomist. Given a topic, parent cluster title, and emerging divergent comment, produce 2 concise child cluster titles (under 40 chars each) in JSON format: {\"titleA\": \"...\", \"titleB\": \"...\"}.",
+            },
+            {
+              role: "user",
+              content: `Topic: ${questionText || "Civic Poll"}\nParent Cluster: ${parentName}\nComment: ${comment || "Divergent perspective"}`,
+            },
+          ],
+          response_format: { type: "json_object" },
+          max_tokens: 120,
+        }),
+      });
+
+      if (resp.ok) {
+        const json = await resp.json();
+        const parsed = JSON.parse(json.choices?.[0]?.message?.content || "{}");
+        if (parsed.titleA && parsed.titleB) {
+          return {
+            titleA: String(parsed.titleA).trim().slice(0, 50),
+            titleB: String(parsed.titleB).trim().slice(0, 50),
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("[valerie-cluster-engine] LLM title inference fallback:", err);
+    }
+  }
+
+  return {
+    titleA: `${parentName} (Branch A)`,
+    titleB: `${parentName} (Branch B)`,
+  };
 }
 
 /**
@@ -255,10 +313,17 @@ export async function processClusterIngestion(
       throw new Error(`Failed to deactivate parent cluster ${bestCluster.id}: ${deactivateErr.message}`);
     }
 
-    // Insert Child Clusters
+    // Insert Child Clusters with inferred or fallback taxonomic titles
+    const { titleA, titleB } = await inferClusterTitles(
+      bestCluster.cluster_name,
+      request.comment,
+      request.question_text,
+      openAiApiKey
+    );
+
     const childRecords = [
       {
-        cluster_name: `${bestCluster.cluster_name} (Branch A)`,
+        cluster_name: titleA,
         centroid_vector: formatVectorForPg(childA),
         parent_cluster_id: bestCluster.id,
         is_active: true,
@@ -266,7 +331,7 @@ export async function processClusterIngestion(
         variance: Number((bestCluster.variance * 0.5).toFixed(6)),
       },
       {
-        cluster_name: `${bestCluster.cluster_name} (Branch B)`,
+        cluster_name: titleB,
         centroid_vector: formatVectorForPg(childB),
         parent_cluster_id: bestCluster.id,
         is_active: true,
@@ -289,29 +354,49 @@ export async function processClusterIngestion(
     const childBId = createdChildren[1].id;
     const assignedClusterId = assignedChildIndex === "A" ? childAId : childBId;
 
-    // Log SPLIT event to valerie.cluster_events
+    // Insert proposal into valerie.cluster_proposals with status 'staged_active'
+    const { data: proposalData, error: proposalErr } = await supabaseClient
+      .schema("valerie")
+      .from("cluster_proposals")
+      .insert({
+        parent_cluster_id: bestCluster.id,
+        child_cluster_ids: [childAId, childBId],
+        variance_score: Number(estimatedVariance.toFixed(6)),
+        sample_size: bestCluster.member_count + 1,
+        status: "staged_active",
+      })
+      .select()
+      .single();
+
+    if (proposalErr) {
+      console.error("[valerie-cluster-engine] Failed to insert cluster_proposal:", proposalErr);
+    }
+
+    // Log PROVISIONAL_SPLIT event to valerie.cluster_events
     const { data: eventData, error: eventErr } = await supabaseClient
       .schema("valerie")
       .from("cluster_events")
       .insert({
-        event_type: "SPLIT",
+        event_type: "PROVISIONAL_SPLIT",
         source_cluster_ids: [bestCluster.id],
         target_cluster_ids: [childAId, childBId],
         executed_by: callerId || null,
         reason: `Dynamic variance tolerance breached (${estimatedVariance.toFixed(4)} > ${tolerance})`,
         metadata: {
+          proposal_id: proposalData?.id,
           parent_cluster_id: bestCluster.id,
           trigger_distance: minDistance,
           trigger_variance: estimatedVariance,
           tolerance_threshold: tolerance,
           split_delta: splitDelta,
+          sample_size: bestCluster.member_count + 1,
         },
       })
       .select()
       .single();
 
     if (eventErr) {
-      console.error("[valerie-cluster-engine] Failed to log SPLIT cluster event:", eventErr);
+      console.error("[valerie-cluster-engine] Failed to log PROVISIONAL_SPLIT cluster event:", eventErr);
     }
 
     // Link response
@@ -327,10 +412,12 @@ export async function processClusterIngestion(
     }
 
     return {
-      action: "SPLIT",
+      action: "PROVISIONAL_SPLIT",
       parent_cluster_id: bestCluster.id,
       child_cluster_ids: [childAId, childBId],
       assigned_cluster_id: assignedClusterId,
+      proposal_id: proposalData?.id,
+      proposal: proposalData,
       event_id: eventData?.id,
       trigger_distance: minDistance,
       new_variance: estimatedVariance,
@@ -422,6 +509,26 @@ export async function handleClusterRequest(req: Request): Promise<Response> {
         { error: "Invalid payload. likert_score (-2..2) and confidence_score (0..100) are required." },
         400
       );
+    }
+
+    // Non-blocking asynchronous dispatch if requested
+    if (payload.async_dispatch || req.headers.get("x-async-dispatch") === "true") {
+      const backgroundTask = processClusterIngestion(
+        supabaseAdmin,
+        payload,
+        openAiApiKey,
+        callerId
+      ).catch((err) => {
+        console.error("[valerie-cluster-engine] Background async execution error:", err);
+      });
+
+      // @ts-ignore
+      if (typeof EdgeRuntime !== "undefined" && typeof (EdgeRuntime as any).waitUntil === "function") {
+        // @ts-ignore
+        (EdgeRuntime as any).waitUntil(backgroundTask);
+      }
+
+      return jsonResponse({ success: true, status: "queued_async" }, 202);
     }
 
     const result = await processClusterIngestion(
