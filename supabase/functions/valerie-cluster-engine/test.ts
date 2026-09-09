@@ -165,6 +165,7 @@ Deno.test("Serialization: PGVector format string parsing & formatting", () => {
 class MockSupabaseClient {
   clusters: any[] = [];
   events: any[] = [];
+  proposals: any[] = [];
   pollResponses: any[] = [];
 
   schema(_name: string) {
@@ -179,6 +180,9 @@ class MockSupabaseClient {
           eq(field: string, val: any) {
             if (table === "topic_clusters") {
               const rows = self.clusters.filter((c) => c[field] === val);
+              return Promise.resolve({ data: rows, error: null });
+            } else if (table === "cluster_proposals") {
+              const rows = self.proposals.filter((p) => p[field] === val);
               return Promise.resolve({ data: rows, error: null });
             }
             return Promise.resolve({ data: [], error: null });
@@ -197,6 +201,8 @@ class MockSupabaseClient {
           self.clusters.push(...inserted);
         } else if (table === "cluster_events") {
           self.events.push(...inserted);
+        } else if (table === "cluster_proposals") {
+          self.proposals.push(...inserted);
         }
 
         return {
@@ -279,7 +285,7 @@ Deno.test("Edge Function Workflow: Cold Start -> Ingestion -> Dynamic Split", as
   };
 
   const res3 = await processClusterIngestion(mockDb, req3, undefined, "user-789");
-  assertEquals(res3.action, "SPLIT");
+  assertEquals(res3.action, "PROVISIONAL_SPLIT");
 
   // Parent cluster must be deactivated
   const parent = mockDb.clusters.find((c) => c.id === res3.parent_cluster_id);
@@ -289,13 +295,21 @@ Deno.test("Edge Function Workflow: Cold Start -> Ingestion -> Dynamic Split", as
   const activeChildren = mockDb.clusters.filter((c) => c.is_active && c.parent_cluster_id === parent.id);
   assertEquals(activeChildren.length, 2);
 
-  // Audit event logged in cluster_events
+  // Proposal recorded in cluster_proposals with status 'staged_active'
+  assertEquals(mockDb.proposals.length, 1);
+  const proposal = mockDb.proposals[0];
+  assertEquals(proposal.status, "staged_active");
+  assertEquals(proposal.parent_cluster_id, parent.id);
+  assertEquals(proposal.child_cluster_ids.length, 2);
+
+  // Audit event logged in cluster_events with PROVISIONAL_SPLIT
   assertEquals(mockDb.events.length, 1);
   const splitEvent = mockDb.events[0];
-  assertEquals(splitEvent.event_type, "SPLIT");
+  assertEquals(splitEvent.event_type, "PROVISIONAL_SPLIT");
   assertEquals(splitEvent.source_cluster_ids[0], parent.id);
   assertEquals(splitEvent.target_cluster_ids.length, 2);
   assertEquals(splitEvent.executed_by, "user-789");
+  assertEquals(splitEvent.metadata.proposal_id, proposal.id);
 });
 
 Deno.test("Event-Sourced Genealogy: Time-Travel Rollback Invariant", () => {
