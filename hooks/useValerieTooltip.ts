@@ -38,22 +38,6 @@ export const calculateSha256 = computeSha256;
 // In-memory client-side cache across component instances (backed by bounded LRU cache)
 export const CLIENT_MEMORY_CACHE = tooltipCache;
 
-/**
- * Generates a deterministic normalized 1536-D vector for text when an external
- * embedding model is not yet loaded on the client.
- */
-export function generateDeterministicEmbedding(text: string): number[] {
-  const dim = 1536;
-  const vec = new Array(dim).fill(0);
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    const idx = (i * 37 + code * 17) % dim;
-    vec[idx] = (vec[idx] + code / 255) % 1;
-  }
-  const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
-  return vec.map((v) => Number((v / norm).toFixed(6)));
-}
-
 export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
   const { language = "en", readingLevel = "general", embedding } = options;
 
@@ -65,6 +49,7 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
     error: null,
   });
 
+  const requestIdRef = useRef<number>(0);
   const activeRequestRef = useRef<string | null>(null);
 
   const fetchTooltip = useCallback(
@@ -72,8 +57,14 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
       const cleanWord = word.trim();
       if (!cleanWord) return null;
 
+      // Synchronously increment request ID to immediately invalidate all older in-flight requests
+      const currentRequestId = ++requestIdRef.current;
+
       // 1. Calculate client-side SHA-256 hash using WebCrypto
       const hashKey = await hashTerm(cleanWord, readingLevel, language);
+
+      if (currentRequestId !== requestIdRef.current) return null;
+      activeRequestRef.current = hashKey;
 
       // 2. Query in-memory LRU cache first (instant sub-10ms response)
       if (tooltipCache.has(hashKey)) {
@@ -94,7 +85,6 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
         hashKey,
         error: null,
       }));
-      activeRequestRef.current = hashKey;
 
       const supabase = createClient();
 
@@ -107,6 +97,8 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
           .eq("original_text_hash", hashKey)
           .maybeSingle();
 
+        if (currentRequestId !== requestIdRef.current) return null;
+
         if (dbRow?.cached_translation) {
           const result: TooltipData = {
             definition: dbRow.cached_translation,
@@ -115,54 +107,54 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
           };
           tooltipCache.set(hashKey, result);
 
-          if (activeRequestRef.current === hashKey) {
-            setState({
-              isLoading: false,
-              definition: result.definition,
-              source: "cache",
-              hashKey,
-              error: null,
-            });
-          }
+          setState({
+            isLoading: false,
+            definition: result.definition,
+            source: "cache",
+            hashKey,
+            error: null,
+          });
           return result;
         }
       } catch {
         // Fall through to semantic cache check
       }
 
-      // 4. On exact cache miss, invoke RPC valerie.match_semantic_cache(p_embedding, p_threshold => 0.96)
-      try {
-        const queryVector =
-          customEmbedding || embedding || generateDeterministicEmbedding(cleanWord);
+      if (currentRequestId !== requestIdRef.current) return null;
 
-        // Call RPC match_semantic_cache with threshold 0.96
-        const rpcCall = (supabase as any).schema
-          ? supabase.schema("valerie").rpc("match_semantic_cache", {
-              p_embedding: queryVector,
-              p_threshold: 0.96,
-            })
-          : supabase.rpc("match_semantic_cache", {
-              p_embedding: queryVector,
-              p_threshold: 0.96,
-            });
+      // 4. On exact cache miss, invoke RPC valerie.match_semantic_cache if a semantic embedding is provided
+      const queryVector = customEmbedding || embedding;
+      if (queryVector) {
+        try {
+          const rpcParams = {
+            p_embedding: queryVector,
+            p_threshold: 0.96,
+            p_target_language: language,
+            p_target_reading_level: String(readingLevel),
+          };
 
-        const { data: semanticRows, error: rpcError } = await rpcCall;
+          const rpcCall = (supabase as any).schema
+            ? supabase.schema("valerie").rpc("match_semantic_cache", rpcParams)
+            : supabase.rpc("match_semantic_cache", rpcParams);
 
-        if (!rpcError && semanticRows) {
-          const match = Array.isArray(semanticRows) ? semanticRows[0] : semanticRows;
-          if (
-            match?.cached_translation &&
-            (match.similarity === undefined || match.similarity >= 0.96)
-          ) {
-            const result: TooltipData = {
-              definition: match.cached_translation,
-              source: "cache",
-              hashKey: match.original_text_hash || hashKey,
-              similarity: match.similarity,
-            };
-            tooltipCache.set(hashKey, result);
+          const { data: semanticRows, error: rpcError } = await rpcCall;
 
-            if (activeRequestRef.current === hashKey) {
+          if (currentRequestId !== requestIdRef.current) return null;
+
+          if (!rpcError && semanticRows) {
+            const match = Array.isArray(semanticRows) ? semanticRows[0] : semanticRows;
+            if (
+              match?.cached_translation &&
+              (match.similarity === undefined || match.similarity >= 0.96)
+            ) {
+              const result: TooltipData = {
+                definition: match.cached_translation,
+                source: "cache",
+                hashKey: match.original_text_hash || hashKey,
+                similarity: match.similarity,
+              };
+              tooltipCache.set(hashKey, result);
+
               setState({
                 isLoading: false,
                 definition: result.definition,
@@ -170,13 +162,15 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
                 hashKey,
                 error: null,
               });
+              return result;
             }
-            return result;
           }
+        } catch {
+          // Semantic RPC unavailable; fall through to Edge Function
         }
-      } catch {
-        // Semantic RPC unavailable; fall through to Edge Function
       }
+
+      if (currentRequestId !== requestIdRef.current) return null;
 
       // 5. If both fail, trigger simplify-word Edge Function or API route
       try {
@@ -207,6 +201,8 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
           }
         }
 
+        if (currentRequestId !== requestIdRef.current) return null;
+
         // Fallback to Next.js API route /api/simplify-word
         if (!definition) {
           const res = await fetch("/api/simplify-word", {
@@ -230,54 +226,36 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
           returnedHash = data.hashKey || hashKey;
         }
 
+        if (currentRequestId !== requestIdRef.current) return null;
+
         const result: TooltipData = {
           definition: definition!,
           source,
           hashKey: returnedHash,
         };
 
-        // Save to in-memory LRU cache
+        // Save to in-memory LRU cache (safe client-side caching)
         tooltipCache.set(hashKey, result);
 
-        // Attempt write-back to valerie.content_cache
-        try {
-          await supabase
-            .schema("valerie")
-            .from("content_cache")
-            .upsert(
-              {
-                original_text_hash: hashKey,
-                target_language: language,
-                target_reading_level: String(readingLevel),
-                cached_translation: definition!,
-              },
-              { onConflict: "original_text_hash,target_language,target_reading_level" }
-            );
-        } catch {
-          // Ignore cache write error on client
-        }
-
-        if (activeRequestRef.current === hashKey) {
-          setState({
-            isLoading: false,
-            definition: result.definition,
-            source: result.source,
-            hashKey,
-            error: null,
-          });
-        }
+        setState({
+          isLoading: false,
+          definition: result.definition,
+          source: result.source,
+          hashKey,
+          error: null,
+        });
         return result;
       } catch (err) {
+        if (currentRequestId !== requestIdRef.current) return null;
+
         const errorMsg = err instanceof Error ? err.message : "Failed to load definition";
-        if (activeRequestRef.current === hashKey) {
-          setState({
-            isLoading: false,
-            definition: null,
-            source: null,
-            hashKey,
-            error: errorMsg,
-          });
-        }
+        setState({
+          isLoading: false,
+          definition: null,
+          source: null,
+          hashKey,
+          error: errorMsg,
+        });
         return null;
       }
     },

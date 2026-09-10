@@ -124,7 +124,7 @@ describe("useValerieTooltip hook", () => {
     expect(result.current.definition).toBe("Database exact match definition.");
   });
 
-  it("resolves from valerie.match_semantic_cache when similarity >= 0.96 without invoking AI completion", async () => {
+  it("resolves from valerie.match_semantic_cache with locale parameters when embedding is provided", async () => {
     // Exact cache miss
     mockMaybeSingle.mockResolvedValueOnce({ data: null, error: null });
 
@@ -143,7 +143,10 @@ describe("useValerieTooltip hook", () => {
     const fetchSpy = vi.fn();
     global.fetch = fetchSpy;
 
-    const { result } = renderHook(() => useValerieTooltip());
+    const mockEmbedding = new Array(1536).fill(0.1);
+    const { result } = renderHook(() =>
+      useValerieTooltip({ language: "es", readingLevel: 8, embedding: mockEmbedding })
+    );
 
     let data: any;
     await act(async () => {
@@ -155,8 +158,57 @@ describe("useValerieTooltip hook", () => {
     expect(data?.similarity).toBe(0.975);
     expect(mockRpc).toHaveBeenCalledWith(
       "match_semantic_cache",
-      expect.objectContaining({ p_threshold: 0.96 })
+      expect.objectContaining({
+        p_threshold: 0.96,
+        p_target_language: "es",
+        p_target_reading_level: "8",
+      })
     );
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("prevents stale in-flight response from overwriting newer cached request", async () => {
+    let resolveSlowFetch: ((value: any) => void) | null = null;
+    const slowPromise = new Promise((resolve) => {
+      resolveSlowFetch = resolve;
+    });
+
+    global.fetch = vi.fn().mockImplementation(() => slowPromise);
+
+    const { result } = renderHook(() => useValerieTooltip());
+
+    // Pre-populate in-memory cache for "congestion pricing"
+    const fastHash = await calculateSha256("congestion pricing:en:general");
+    tooltipCache.set(fastHash, {
+      definition: "Fast cached definition.",
+      source: "cache",
+      hashKey: fastHash,
+    });
+
+    // Start slow Request A for "zoning" (does not resolve immediately)
+    const promiseA = result.current.fetchTooltip("zoning");
+
+    // Request B for "congestion pricing" completes immediately from in-memory cache
+    await act(async () => {
+      await result.current.fetchTooltip("congestion pricing");
+    });
+
+    expect(result.current.definition).toBe("Fast cached definition.");
+
+    // Now resolve slow Request A
+    await act(async () => {
+      resolveSlowFetch!({
+        ok: true,
+        json: async () => ({
+          definition: "Stale zoning definition.",
+          source: "gemini",
+          hashKey: "zoning-hash",
+        }),
+      });
+      await promiseA;
+    });
+
+    // State must NOT be overwritten by the stale Request A
+    expect(result.current.definition).toBe("Fast cached definition.");
   });
 });

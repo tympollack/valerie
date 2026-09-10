@@ -130,4 +130,28 @@ describe("BivariatePollCard Component", () => {
 
     expect(onVoteSuccess).toHaveBeenCalled();
   });
+
+  it("does not bypass commit gate on failed vote submission and displays error", async () => {
+    mockCastVote.mockResolvedValueOnce({
+      success: false,
+      error: "You must be signed in to vote.",
+    });
+
+    render(
+      <BivariatePollCard
+        pollId="poll-failed-test"
+        questionText="Protected Gate Question"
+      />
+    );
+
+    const submitBtn = screen.getByText(/Commit & Seal Bivariate Vote/i);
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    // Error must be displayed and locked countdown/reveal must NOT be shown
+    expect(screen.getByText(/You must be signed in to vote/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Bivariate Vote Sealed/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Commit & Seal Bivariate Vote/i)).toBeInTheDocument();
+  });
 });

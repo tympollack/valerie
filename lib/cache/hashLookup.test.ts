@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   hashTerm,
   computeSha256,
+  sha256PureJs,
   buildTermCacheKey,
   LRUCache,
   hashCache,
@@ -31,6 +32,9 @@ describe("hashLookup module", () => {
         expect(actual).toBe(expected);
         expect(actual).toHaveLength(64);
         expect(/^[0-9a-f]{64}$/.test(actual)).toBe(true);
+
+        // Also verify pure JS fallback directly
+        expect(sha256PureJs(input)).toBe(expected);
       }
     });
 
