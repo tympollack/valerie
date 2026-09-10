@@ -1,10 +1,13 @@
 import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { getCrossDomainCookieOptions } from "@/lib/auth/ssoHandshake";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   });
+
+  const cookieDomainOpts = getCrossDomainCookieOptions(request.nextUrl.hostname);
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -22,7 +25,10 @@ export async function updateSession(request: NextRequest) {
             request,
           });
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options as any)
+            supabaseResponse.cookies.set(name, value, {
+              ...options,
+              ...cookieDomainOpts,
+            } as any)
           );
         },
       } satisfies CookieMethodsServer,

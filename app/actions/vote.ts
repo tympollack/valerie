@@ -45,6 +45,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake";
 import { revalidatePath } from "next/cache";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,15 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     return { success: false, error: "You must be signed in to vote." };
   }
 
+  // --- Anti-Sybil Verification check (Defense-in-depth before DB RLS hard gate)
+  const antiSybilProof = extractAntiSybilProof(user);
+  if (!antiSybilProof.isHuman || antiSybilProof.trustState !== "active") {
+    return {
+      success: false,
+      error: "Single-human identity verification required. Please complete verification on the SunShade Hub.",
+    };
+  }
+
   const { pollId, likertScore, confidenceScore, comment, h3HexIndex } = payload;
 
   // --- Light server-side validation (DB CHECK constraints are the hard gate)
@@ -117,7 +127,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       // locked_until is intentionally NOT set here — the DB default
       // (NOW() + INTERVAL '24 hours') owns this value to prevent tampering.
     })
-    .select("locked_until")
+    .select("id, locked_until")
     .single();
 
   if (insertError) {
@@ -130,6 +140,14 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       };
     }
 
+    // PostgreSQL error code 42501 = insufficient_privilege (RLS policy check failed)
+    if (insertError.code === "42501") {
+      return {
+        success: false,
+        error: "Vote rejected: Your account must have active human verification.",
+      };
+    }
+
     // All other DB errors (FK violation, CHECK constraint, connectivity)
     console.error("[Project Valerie] Vote insert failed:", insertError);
     return {
@@ -137,6 +155,22 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       error: "Failed to record your vote. Please try again.",
     };
   }
+
+  // --- Dynamic Topic Clustering Trigger (Asynchronous Post-Commit)
+  supabase.functions
+    .invoke("valerie-cluster-engine", {
+      body: {
+        poll_id:          pollId,
+        response_id:      data?.id,
+        user_id:          user.id,
+        likert_score:     likertScore,
+        confidence_score: confidenceScore,
+        comment:          comment?.trim() || undefined,
+      },
+    })
+    .catch((err) => {
+      console.warn("[Project Valerie] Background cluster invocation non-blocking warning:", err);
+    });
 
   // Bust any cached rendering of the poll results page
   revalidatePath(`/polls/${pollId}`);
@@ -146,3 +180,10 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     lockedUntil: data.locked_until,   // ISO 8601 timestamp from DB
   };
 }
+
+/**
+ * Server Action alias matching task specification:
+ * castVote({ pollId, likertScore, confidenceScore, comment })
+ */
+export const castVote = submitVote;
+
