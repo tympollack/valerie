@@ -19,7 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ValerieTooltip } from "@/components/valerie/ValerieTooltip";
 import { RevealGate, type BivariateVote } from "@/components/valerie/RevealGate";
-import { submitVote } from "@/app/actions/vote";
+import { castVote, submitVote } from "@/app/actions/vote";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -204,7 +204,7 @@ export function BivariatePollCard({
 
     startTransition(async () => {
       try {
-        const result = await submitVote({
+        const result = await castVote({
           pollId,
           likertScore,
           confidenceScore,
@@ -218,23 +218,12 @@ export function BivariatePollCard({
           setIsSubmitted(true);
           onVoteSuccess?.({ likertScore, confidenceScore, comment });
         } else {
-          // If server reports already voted or unauthorized in demo, still provide friendly feedback
-          if (result.error?.includes("signed in") || result.error?.includes("already voted")) {
-            // Local simulated commit for instant interactive testing
-            const localUnlock = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-            setLockedUntil(localUnlock);
-            setIsSubmitted(true);
-            onVoteSuccess?.({ likertScore, confidenceScore, comment });
-          } else {
-            setErrorMsg(result.error || "Failed to commit vote.");
-          }
+          setErrorMsg(result.error || "Failed to commit vote.");
         }
-      } catch {
-        // Fallback for standalone offline environments
-        const fallbackUnlock = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-        setLockedUntil(fallbackUnlock);
-        setIsSubmitted(true);
-        onVoteSuccess?.({ likertScore, confidenceScore, comment });
+      } catch (err) {
+        const errorText =
+          err instanceof Error ? err.message : "Failed to commit vote. Please try again.";
+        setErrorMsg(errorText);
       }
     });
   }, [pollId, likertScore, confidenceScore, comment, onVoteSuccess]);

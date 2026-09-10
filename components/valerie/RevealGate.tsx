@@ -37,6 +37,7 @@ export interface RevealGateProps {
   pollQuestion?: string;
   totalVotesCount?: number;
   className?: string;
+  allowSimulation?: boolean; // Restricted strictly to preview/test harnesses
 }
 
 // Bivariate Grid cell definition
@@ -101,11 +102,17 @@ export function RevealGate({
   pollQuestion,
   totalVotesCount = 401,
   className,
+  allowSimulation = false,
 }: RevealGateProps) {
   // Client mount tracking to avoid hydration mismatch on timestamps
   const [isMounted, setIsMounted] = useState(false);
   const [now, setNow] = useState<number>(Date.now());
   const [manualUnlockSimulation, setManualUnlockSimulation] = useState(false);
+
+  // Simulation is strictly gated to test environments or explicit prop
+  const isSimulationAllowed =
+    allowSimulation ||
+    (typeof process !== "undefined" && process.env.NODE_ENV === "test");
 
   useEffect(() => {
     setIsMounted(true);
@@ -126,7 +133,8 @@ export function RevealGate({
   }, [lockedUntil, now]);
 
   const timeRemainingMs = Math.max(0, targetUnlockTime - now);
-  const isLockExpired = isSubmitted && (timeRemainingMs === 0 || manualUnlockSimulation);
+  const isLockExpired =
+    isSubmitted && (timeRemainingMs === 0 || (isSimulationAllowed && manualUnlockSimulation));
 
   // Time format calculations
   const hours = Math.floor(timeRemainingMs / (1000 * 60 * 60));
@@ -316,21 +324,23 @@ export function RevealGate({
               </p>
             </div>
 
-            {/* Test / Fast-forward Reveal Simulation Button */}
-            <div className="flex items-center justify-between border-t border-slate-800 pt-4">
-              <span className="text-xs text-slate-400">
-                Evaluating or previewing interface?
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setManualUnlockSimulation(true)}
-                className="border-cyan-500/40 bg-cyan-950/30 text-cyan-300 hover:bg-cyan-900/50 hover:text-cyan-200 gap-1.5 text-xs font-semibold"
-              >
-                <Unlock className="h-3.5 w-3.5 text-cyan-400" />
-                Simulate 24h Unlock
-              </Button>
-            </div>
+            {/* Test / Fast-forward Reveal Simulation Button (Restricted strictly to preview/test harnesses) */}
+            {isSimulationAllowed && (
+              <div className="flex items-center justify-between border-t border-slate-800 pt-4">
+                <span className="text-xs text-slate-400">
+                  Evaluating or previewing interface?
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setManualUnlockSimulation(true)}
+                  className="border-cyan-500/40 bg-cyan-950/30 text-cyan-300 hover:bg-cyan-900/50 hover:text-cyan-200 gap-1.5 text-xs font-semibold"
+                >
+                  <Unlock className="h-3.5 w-3.5 text-cyan-400" />
+                  Simulate 24h Unlock
+                </Button>
+              </div>
+            )}
           </motion.div>
         ) : (
           // =================================================================
