@@ -146,6 +146,20 @@ class ValerieDatabaseSecurityEngine {
     const totalConfidence = pollVotes.reduce((sum, r) => sum + r.confidence_score, 0);
     const totalWeightedLikert = pollVotes.reduce((sum, r) => sum + r.likert_score * r.confidence_score, 0);
 
+    const meanConfidence = Number((totalConfidence / totalVotes).toFixed(4));
+    const meanLikert = Number((pollVotes.reduce((sum, r) => sum + r.likert_score, 0) / totalVotes).toFixed(4));
+
+    // Sample standard deviations
+    const varLikert = totalVotes > 1
+      ? pollVotes.reduce((sum, r) => sum + Math.pow(r.likert_score - meanLikert, 2), 0) / (totalVotes - 1)
+      : 0;
+    const stddevLikert = Number(Math.sqrt(varLikert).toFixed(4));
+
+    const varConfidence = totalVotes > 1
+      ? pollVotes.reduce((sum, r) => sum + Math.pow(r.confidence_score - meanConfidence, 2), 0) / (totalVotes - 1)
+      : 0;
+    const stddevConfidence = Number(Math.sqrt(varConfidence).toFixed(4));
+
     const globalWeightedAvgSentiment =
       totalConfidence > 0 ? Number((totalWeightedLikert / totalConfidence).toFixed(4)) : 0;
     const globalAvgConfidence = Number((totalConfidence / totalVotes).toFixed(2));
@@ -172,6 +186,10 @@ class ValerieDatabaseSecurityEngine {
         total_poll_votes: totalVotes,
         global_weighted_avg_sentiment: globalWeightedAvgSentiment,
         global_avg_confidence: globalAvgConfidence,
+        mean_likert: meanLikert,
+        mean_confidence: meanConfidence,
+        stddev_likert: stddevLikert,
+        stddev_confidence: stddevConfidence,
       };
     });
   }
@@ -334,6 +352,10 @@ describe("Project Valerie: Hard-Locked Security Assertions", () => {
 
       expect(results).toHaveLength(5); // Returns 5 Likert distribution buckets (-2..2)
       expect(results[0].total_poll_votes).toBe(2);
+      expect(results[0].mean_likert).toBe(1.5); // (2 + 1) / 2
+      expect(results[0].mean_confidence).toBe(80); // (90 + 70) / 2
+      expect(results[0].stddev_likert).toBe(0.7071);
+      expect(results[0].stddev_confidence).toBe(14.1421);
     });
   });
 

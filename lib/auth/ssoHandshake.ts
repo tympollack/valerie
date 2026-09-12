@@ -560,3 +560,61 @@ export async function validateSSOHandshake(
     token,
   };
 }
+
+// =============================================================================
+// Middleware Context & Route Protection Helpers
+// =============================================================================
+
+export interface VerifiedUserContext {
+  userId: string;
+  isHumanVerified: boolean;
+  verificationTier: VerificationTier;
+  trustState: TrustState;
+}
+
+/**
+ * Extracts verified user context from downstream request headers injected by middleware.
+ */
+export function getUserContextFromHeaders(headers: { get: (name: string) => string | null }): VerifiedUserContext | null {
+  const userId = headers.get("x-user-id");
+  if (!userId) return null;
+
+  return {
+    userId,
+    isHumanVerified: headers.get("x-is-human-verified") === "true",
+    verificationTier: (headers.get("x-verification-tier") as VerificationTier) || "UNVERIFIED",
+    trustState: (headers.get("x-trust-state") as TrustState) || "active",
+  };
+}
+
+/**
+ * Determines whether a pathname or request is a protected voting route.
+ */
+export function isVotingRoute(pathname: string, method: string = "GET", headers?: { get: (name: string) => string | null }): boolean {
+  const normalized = pathname.toLowerCase();
+  const isVotePath =
+    normalized.startsWith("/vote") ||
+    normalized.startsWith("/voting") ||
+    normalized.includes("/vote") ||
+    normalized.startsWith("/api/vote");
+
+  const isServerAction = Boolean(headers?.get("next-action"));
+  return isVotePath || (isServerAction && normalized.startsWith("/polls"));
+}
+
+/**
+ * Builds the cross-domain redirect URL for unauthenticated users.
+ */
+export function buildSSOLoginRedirect(requestUrl: string, rootDomain: string = "sunshade.icu"): string {
+  const returnTo = encodeURIComponent(requestUrl);
+  return `https://auth.${rootDomain}/login?return_to=${returnTo}`;
+}
+
+/**
+ * Builds the cross-domain redirect URL for authenticated users requiring human verification.
+ */
+export function buildSSOVerifyRedirect(requestUrl: string, rootDomain: string = "sunshade.icu"): string {
+  const returnTo = encodeURIComponent(requestUrl);
+  return `https://auth.${rootDomain}/verify?return_to=${returnTo}`;
+}
+
