@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@digitalcanopy/supabase": "^0.1.0",
+    "@digitalcanopy/ui": "^0.1.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.49.1",
     "class-variance-authority": "^0.7.1",
@@ -36,6 +38,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/react-native": "^0.72.8",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "jsdom": "^30.0.1",
