@@ -28,37 +28,41 @@ export interface UserContext {
  * Resolves current user session and Anti-Sybil verification status from Supabase and headers.
  */
 export async function getCurrentUserContext(): Promise<UserContext> {
-  const supabase = await createClient()
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+  if (supabaseUrl && supabaseKey) {
+    try {
+      const supabase = await createClient()
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
 
-    if (user) {
-      const proof = extractAntiSybilProof(user)
-      const email = user.email || null
-      const displayName =
-        (user.user_metadata?.full_name as string) ||
-        (user.user_metadata?.name as string) ||
-        (user.user_metadata?.display_name as string) ||
-        (email ? email.split("@")[0] : null)
+      if (user) {
+        const proof = extractAntiSybilProof(user)
+        const email = user.email || null
+        const displayName =
+          (user.user_metadata?.full_name as string) ||
+          (user.user_metadata?.name as string) ||
+          (user.user_metadata?.display_name as string) ||
+          (email ? email.split("@")[0] : null)
 
-      return {
-        authenticated: true,
-        userId: user.id,
-        email,
-        displayName,
-        isHumanVerified: proof.isHuman && proof.trustState === "active",
-        verificationTier: proof.verificationTier,
-        trustState: proof.trustState,
-        nullifierHash: proof.nullifierHash,
-        provider: proof.provider,
-        score: proof.score,
+        return {
+          authenticated: true,
+          userId: user.id,
+          email,
+          displayName,
+          isHumanVerified: proof.isHuman && proof.trustState === "active",
+          verificationTier: proof.verificationTier,
+          trustState: proof.trustState,
+          nullifierHash: proof.nullifierHash,
+          provider: proof.provider,
+          score: proof.score,
+        }
       }
+    } catch {
+      // Fallback to headers or unauthenticated context
     }
-  } catch {
-    // Fallback to headers
   }
 
   // Fallback: check headers injected by middleware
@@ -103,11 +107,16 @@ export async function getCurrentUserContext(): Promise<UserContext> {
  * Signs out of Supabase and clears cross-domain SSO cookies across .sunshade.icu.
  */
 export async function signOutAction(): Promise<{ success: boolean }> {
-  try {
-    const supabase = await createClient()
-    await supabase.auth.signOut()
-  } catch {
-    // Non-blocking if offline
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (supabaseUrl && supabaseKey) {
+    try {
+      const supabase = await createClient()
+      await supabase.auth.signOut()
+    } catch {
+      // Non-blocking if offline or unconfigured
+    }
   }
 
   const cookieStore = await cookies()

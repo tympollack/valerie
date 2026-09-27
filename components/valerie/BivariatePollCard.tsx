@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useTransition, useMemo } from "react"
+import { useState, useCallback, useTransition, useMemo, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Lock,
@@ -220,6 +220,13 @@ export function BivariatePollCard({
   const [lockedUntil, setLockedUntil] = useState<string | undefined>(undefined)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [returnUrl, setReturnUrl] = useState("")
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setReturnUrl(window.location.href)
+    }
+  }, [])
 
   const activeLikert = useMemo(
     () => LIKERT_STEPS.find((s) => s.value === likertScore) || LIKERT_STEPS[2],
@@ -573,7 +580,11 @@ export function BivariatePollCard({
                 {errorMsg.toLowerCase().includes("verification") && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <a
-                      href="https://auth.sunshade.icu/verify"
+                      href={
+                        returnUrl
+                          ? `https://auth.sunshade.icu/verify?return_to=${encodeURIComponent(returnUrl)}`
+                          : "https://auth.sunshade.icu/verify"
+                      }
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-amber-400"
@@ -592,7 +603,11 @@ export function BivariatePollCard({
                 {errorMsg.toLowerCase().includes("signed in") && (
                   <div className="flex items-center gap-2 pt-1">
                     <a
-                      href="https://auth.sunshade.icu/login"
+                      href={
+                        returnUrl
+                          ? `https://auth.sunshade.icu/login?return_to=${encodeURIComponent(returnUrl)}`
+                          : "https://auth.sunshade.icu/login"
+                      }
                       className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-cyan-400"
                     >
                       <span>Sign In with SunShade Hub</span>

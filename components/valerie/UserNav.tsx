@@ -47,6 +47,22 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isSigningOut, startSignOut] = useTransition()
 
+  const [returnToUrl, setReturnToUrl] = useState("")
+
+  // Sync state if server-provided initialUserContext changes (e.g. after router.refresh)
+  useEffect(() => {
+    if (initialUserContext) {
+      setUserContext(initialUserContext)
+    }
+  }, [initialUserContext])
+
+  // Safely set the return URL on client mount to prevent empty return_to during SSR
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setReturnToUrl(window.location.href)
+    }
+  }, [])
+
   // Listen to client-side auth state changes for real-time reactivity
   useEffect(() => {
     try {
@@ -55,15 +71,15 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
         data: { subscription },
       } = supabase.auth.onAuthStateChange(async (_event, session) => {
         if (!session?.user) {
-          // If no session on client, and initial wasn't authenticated, update
-          if (!initialUserContext?.authenticated) {
-            setUserContext((prev) => ({
-              ...prev,
-              authenticated: false,
-              userId: null,
-              email: null,
-            }))
-          }
+          setUserContext({
+            authenticated: false,
+            userId: null,
+            email: null,
+            displayName: null,
+            isHumanVerified: false,
+            verificationTier: "UNVERIFIED",
+            trustState: "active",
+          })
         }
       })
 
@@ -73,7 +89,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
     } catch {
       // Ignore if offline / local mock
     }
-  }, [initialUserContext])
+  }, [])
 
   const handleSignOut = () => {
     startSignOut(async () => {
@@ -83,14 +99,21 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       } catch {
         // Non-blocking
       }
+      setUserContext({
+        authenticated: false,
+        userId: null,
+        email: null,
+        displayName: null,
+        isHumanVerified: false,
+        verificationTier: "UNVERIFIED",
+        trustState: "active",
+      })
       await signOutAction()
       setIsOpen(false)
       router.refresh()
     })
   }
 
-  const currentOrigin =
-    typeof window !== "undefined" ? window.location.origin : ""
   const hubBaseUrl =
     typeof window !== "undefined" &&
     window.location.hostname.endsWith(".sunshade.icu")
@@ -102,8 +125,12 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       ? "https://auth.sunshade.icu"
       : "https://auth.sunshade.icu"
 
-  const loginUrl = `${authBaseUrl}/login?return_to=${encodeURIComponent(currentOrigin)}`
-  const verifyUrl = `${authBaseUrl}/verify?return_to=${encodeURIComponent(currentOrigin)}`
+  const loginUrl = returnToUrl
+    ? `${authBaseUrl}/login?return_to=${encodeURIComponent(returnToUrl)}`
+    : `${authBaseUrl}/login`
+  const verifyUrl = returnToUrl
+    ? `${authBaseUrl}/verify?return_to=${encodeURIComponent(returnToUrl)}`
+    : `${authBaseUrl}/verify`
 
   // 1. Unauthenticated State
   if (!userContext.authenticated) {

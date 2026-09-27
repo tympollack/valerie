@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useState, useTransition, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import {
   ShieldCheck,
@@ -55,8 +55,14 @@ export function SettingsView({ userContext }: SettingsViewProps) {
     })
   }
 
-  const currentOrigin =
-    typeof window !== "undefined" ? window.location.origin : ""
+  const [returnToUrl, setReturnToUrl] = useState("")
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setReturnToUrl(window.location.href)
+    }
+  }, [])
+
   const hubBaseUrl =
     typeof window !== "undefined" &&
     window.location.hostname.endsWith(".sunshade.icu")
@@ -68,8 +74,12 @@ export function SettingsView({ userContext }: SettingsViewProps) {
       ? "https://auth.sunshade.icu"
       : "https://auth.sunshade.icu"
 
-  const loginUrl = `${authBaseUrl}/login?return_to=${encodeURIComponent(currentOrigin)}`
-  const verifyUrl = `${authBaseUrl}/verify?return_to=${encodeURIComponent(currentOrigin)}`
+  const loginUrl = returnToUrl
+    ? `${authBaseUrl}/login?return_to=${encodeURIComponent(returnToUrl)}`
+    : `${authBaseUrl}/login`
+  const verifyUrl = returnToUrl
+    ? `${authBaseUrl}/verify?return_to=${encodeURIComponent(returnToUrl)}`
+    : `${authBaseUrl}/verify`
 
   return (
     <div className="space-y-6">
@@ -323,7 +333,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
           <span>Connected SunShade Services</span>
         </h3>
 
-        <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-3">
           <a
             href={`${hubBaseUrl}/dashboard`}
             target="_blank"
@@ -342,7 +352,24 @@ export function SettingsView({ userContext }: SettingsViewProps) {
           </a>
 
           <a
-            href={`${hubBaseUrl}/dashboard`}
+            href={verifyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/50 p-3.5 text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
+          >
+            <div>
+              <p className="font-semibold text-slate-100">
+                Identity Verification Portal
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-400">
+                Single-human proof and verification tiers
+              </p>
+            </div>
+            <ExternalLink className="ml-2 h-4 w-4 shrink-0 text-slate-500" />
+          </a>
+
+          <a
+            href={`${hubBaseUrl}/dashboard#profile`}
             target="_blank"
             rel="noreferrer"
             className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/50 p-3.5 text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
@@ -352,7 +379,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
                 Citizen Profile &amp; Settings
               </p>
               <p className="mt-0.5 text-[11px] text-slate-400">
-                Update display name, avatar, and security
+                Update avatar, password, and security
               </p>
             </div>
             <ExternalLink className="ml-2 h-4 w-4 shrink-0 text-slate-500" />

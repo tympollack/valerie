@@ -8,7 +8,20 @@ import { Badge } from "@/components/ui/badge"
 export const dynamic = "force-dynamic"
 
 export default async function Page() {
-  const userContext = await getCurrentUserContext()
+  let userContext
+  try {
+    userContext = await getCurrentUserContext()
+  } catch {
+    userContext = {
+      authenticated: false,
+      userId: null,
+      email: null,
+      displayName: null,
+      isHumanVerified: false,
+      verificationTier: "UNVERIFIED" as const,
+      trustState: "active" as const,
+    }
+  }
   let pollId = "demo-poll-01"
   let questionText =
     "The municipal council should convert Main Street into a [[pedestrian-only zone]] to boost [[community sentiment]] and local commerce."
