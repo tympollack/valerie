@@ -16,7 +16,7 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@digitalcanopy/supabase": "^0.1.0",
-    "@digitalcanopy/ui": "^0.1.0",
+    "@digitalcanopy/ui": "^0.1.2",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.49.1",
     "class-variance-authority": "^0.7.1",
@@ -45,6 +45,7 @@
     "jsdom": "^30.0.1",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
+    "react-native-web": "^0.21.3",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.11"
