@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
           const definition = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
           if (definition) {
             // Write to cache if possible
-            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition);
+            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition, word);
             return NextResponse.json({
               definition,
               source: "gemini",
@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
           const data = await res.json();
           const definition = data.choices?.[0]?.message?.content?.trim();
           if (definition) {
-            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition);
+            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition, word);
             return NextResponse.json({
               definition,
               source: "openai",
@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
       `"${word}" is a key civic or policy concept. In community deliberation, it refers to terms or frameworks that shape public decision-making and collective outcome planning.`;
 
     // Attempt to persist the fallback definition
-    trySaveToCache(hashKey, targetLanguage, targetReadingLevel, fallbackDefinition);
+    trySaveToCache(hashKey, targetLanguage, targetReadingLevel, fallbackDefinition, word);
 
     return NextResponse.json({
       definition: fallbackDefinition,
@@ -184,23 +184,28 @@ async function trySaveToCache(
   hashKey: string,
   targetLanguage: string,
   targetReadingLevel: string,
-  definition: string
+  definition: string,
+  originalText?: string
 ) {
   try {
     const supabase = await createClient();
-    await supabase
+    const { error } = await supabase
       .schema("valerie")
       .from("content_cache")
       .upsert(
         {
           original_text_hash: hashKey,
+          original_text: originalText,
           target_language: targetLanguage,
           target_reading_level: targetReadingLevel,
           cached_translation: definition,
         },
         { onConflict: "original_text_hash,target_language,target_reading_level" }
       );
-  } catch {
-    // Non-fatal if DB write fails
+    if (error) {
+      console.warn("[ContentCache] Cache write error:", error.message);
+    }
+  } catch (err) {
+    console.warn("[ContentCache] Failed to persist definition:", err);
   }
 }

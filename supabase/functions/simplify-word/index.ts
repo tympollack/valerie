@@ -238,6 +238,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     .upsert(
       {
         original_text_hash:   contentHash,
+        original_text:        word,
         target_language:      targetLanguage,
         target_reading_level: targetReadingLevel,
         cached_translation:   definition,
