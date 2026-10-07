@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import {
+  buildDynamicFewShotPrompt,
+  injectFewShotSystemPrompt,
+} from "@/lib/ai/fewShotInjector";
 
 // Fallback high-quality neutral civic definitions for instant offline/demo capability
 const FALLBACK_DEFINITIONS: Record<string, string> = {
@@ -46,6 +50,28 @@ export async function POST(req: NextRequest) {
     const targetLanguage = (body.targetLanguage ?? "en").toString().trim().slice(0, 10);
     const targetReadingLevel = (body.targetReadingLevel ?? "general").toString().trim().slice(0, 20);
 
+    let embedding: number[] | undefined;
+    if (body.embedding !== undefined) {
+      if (
+        Array.isArray(body.embedding) &&
+        body.embedding.length > 0 &&
+        body.embedding.length <= 1536 &&
+        body.embedding.every(
+          (val: unknown) => typeof val === "number" && Number.isFinite(val)
+        )
+      ) {
+        embedding = body.embedding;
+      } else {
+        return NextResponse.json(
+          {
+            error:
+              "The 'embedding' field, if provided, must be a non-empty array of at most 1536 finite numbers.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     if (!word || word.length > 200) {
       return NextResponse.json(
         { error: "The 'word' field is required and must be ≤200 characters." },
@@ -78,11 +104,33 @@ export async function POST(req: NextRequest) {
       // Supabase connection or table not reachable; continue to AI / fallback
     }
 
+    // Dynamic Few-Shot RAG injection if embedding provided
+    let fewShotDemonstrations = "";
+    if (embedding && embedding.length > 0) {
+      try {
+        const { demonstrations } = await buildDynamicFewShotPrompt({
+          baseSystemPrompt: "",
+          embedding,
+          options: {
+            language: targetLanguage,
+            readingLevel: targetReadingLevel,
+          },
+        });
+        fewShotDemonstrations = demonstrations;
+      } catch (err) {
+        console.warn("[FewShotRAG] Semantic injection fallback:", err);
+      }
+    }
+
     // 2. Try Google Gemini API if GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY is present
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     if (geminiKey) {
       try {
-        const prompt = `You are an empathetic, objective, non-partisan civic and political educator. Explain the term "${word}" in 2 concise, neutral sentences suitable for a ${targetReadingLevel} reader in ${targetLanguage}. Avoid any advocacy, jargon, or partisan framing.`;
+        let prompt = `You are an empathetic, objective, non-partisan civic and political educator. Explain the term "${word}" in 2 concise, neutral sentences suitable for a ${targetReadingLevel} reader in ${targetLanguage}. Avoid any advocacy, jargon, or partisan framing.`;
+        if (fewShotDemonstrations) {
+          prompt = `${prompt}\n\n${fewShotDemonstrations}`;
+        }
+
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
           {
@@ -103,11 +151,12 @@ export async function POST(req: NextRequest) {
           const definition = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
           if (definition) {
             // Write to cache if possible
-            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition);
+            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition, word);
             return NextResponse.json({
               definition,
               source: "gemini",
               hashKey,
+              fewShotInjected: Boolean(fewShotDemonstrations),
             });
           }
         }
@@ -120,7 +169,10 @@ export async function POST(req: NextRequest) {
     const openAIKey = process.env.OPENAI_API_KEY;
     if (openAIKey) {
       try {
-        const systemPrompt = `You are an empathetic, objective, non-partisan civic and political educator. Calibrate your response for a ${targetReadingLevel}-level reader in ${targetLanguage}. Provide 2 neutral, clear sentences explaining the concept with zero bias.`;
+        const baseSystemPrompt = `You are an empathetic, objective, non-partisan civic and political educator. Calibrate your response for a ${targetReadingLevel}-level reader in ${targetLanguage}. Provide 2 neutral, clear sentences explaining the concept with zero bias.`;
+        const systemPrompt = fewShotDemonstrations
+          ? injectFewShotSystemPrompt(baseSystemPrompt, fewShotDemonstrations)
+          : baseSystemPrompt;
         const userPrompt = `Define "${word}" in plain, non-partisan language.`;
 
         const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -144,11 +196,12 @@ export async function POST(req: NextRequest) {
           const data = await res.json();
           const definition = data.choices?.[0]?.message?.content?.trim();
           if (definition) {
-            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition);
+            trySaveToCache(hashKey, targetLanguage, targetReadingLevel, definition, word);
             return NextResponse.json({
               definition,
               source: "openai",
               hashKey,
+              fewShotInjected: Boolean(fewShotDemonstrations),
             });
           }
         }
@@ -165,7 +218,7 @@ export async function POST(req: NextRequest) {
       `"${word}" is a key civic or policy concept. In community deliberation, it refers to terms or frameworks that shape public decision-making and collective outcome planning.`;
 
     // Attempt to persist the fallback definition
-    trySaveToCache(hashKey, targetLanguage, targetReadingLevel, fallbackDefinition);
+    trySaveToCache(hashKey, targetLanguage, targetReadingLevel, fallbackDefinition, word);
 
     return NextResponse.json({
       definition: fallbackDefinition,
@@ -184,23 +237,28 @@ async function trySaveToCache(
   hashKey: string,
   targetLanguage: string,
   targetReadingLevel: string,
-  definition: string
+  definition: string,
+  originalText?: string
 ) {
   try {
     const supabase = await createClient();
-    await supabase
+    const { error } = await supabase
       .schema("valerie")
       .from("content_cache")
       .upsert(
         {
           original_text_hash: hashKey,
+          original_text: originalText,
           target_language: targetLanguage,
           target_reading_level: targetReadingLevel,
           cached_translation: definition,
         },
         { onConflict: "original_text_hash,target_language,target_reading_level" }
       );
-  } catch {
-    // Non-fatal if DB write fails
+    if (error) {
+      console.warn("[ContentCache] Cache write error:", error.message);
+    }
+  } catch (err) {
+    console.warn("[ContentCache] Failed to persist definition:", err);
   }
 }
