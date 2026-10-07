@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import {
+  buildDynamicFewShotPrompt,
+  injectFewShotSystemPrompt,
+} from "@/lib/ai/fewShotInjector";
 
 // Fallback high-quality neutral civic definitions for instant offline/demo capability
 const FALLBACK_DEFINITIONS: Record<string, string> = {
@@ -45,6 +49,7 @@ export async function POST(req: NextRequest) {
     const word = (body.word ?? "").toString().trim();
     const targetLanguage = (body.targetLanguage ?? "en").toString().trim().slice(0, 10);
     const targetReadingLevel = (body.targetReadingLevel ?? "general").toString().trim().slice(0, 20);
+    const embedding = Array.isArray(body.embedding) ? (body.embedding as number[]) : undefined;
 
     if (!word || word.length > 200) {
       return NextResponse.json(
@@ -78,11 +83,33 @@ export async function POST(req: NextRequest) {
       // Supabase connection or table not reachable; continue to AI / fallback
     }
 
+    // Dynamic Few-Shot RAG injection if embedding provided
+    let fewShotDemonstrations = "";
+    if (embedding && embedding.length > 0) {
+      try {
+        const { demonstrations } = await buildDynamicFewShotPrompt({
+          baseSystemPrompt: "",
+          embedding,
+          options: {
+            language: targetLanguage,
+            readingLevel: targetReadingLevel,
+          },
+        });
+        fewShotDemonstrations = demonstrations;
+      } catch (err) {
+        console.warn("[FewShotRAG] Semantic injection fallback:", err);
+      }
+    }
+
     // 2. Try Google Gemini API if GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY is present
     const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     if (geminiKey) {
       try {
-        const prompt = `You are an empathetic, objective, non-partisan civic and political educator. Explain the term "${word}" in 2 concise, neutral sentences suitable for a ${targetReadingLevel} reader in ${targetLanguage}. Avoid any advocacy, jargon, or partisan framing.`;
+        let prompt = `You are an empathetic, objective, non-partisan civic and political educator. Explain the term "${word}" in 2 concise, neutral sentences suitable for a ${targetReadingLevel} reader in ${targetLanguage}. Avoid any advocacy, jargon, or partisan framing.`;
+        if (fewShotDemonstrations) {
+          prompt = `${prompt}\n\n${fewShotDemonstrations}`;
+        }
+
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
           {
@@ -108,6 +135,7 @@ export async function POST(req: NextRequest) {
               definition,
               source: "gemini",
               hashKey,
+              fewShotInjected: Boolean(fewShotDemonstrations),
             });
           }
         }
@@ -120,7 +148,10 @@ export async function POST(req: NextRequest) {
     const openAIKey = process.env.OPENAI_API_KEY;
     if (openAIKey) {
       try {
-        const systemPrompt = `You are an empathetic, objective, non-partisan civic and political educator. Calibrate your response for a ${targetReadingLevel}-level reader in ${targetLanguage}. Provide 2 neutral, clear sentences explaining the concept with zero bias.`;
+        const baseSystemPrompt = `You are an empathetic, objective, non-partisan civic and political educator. Calibrate your response for a ${targetReadingLevel}-level reader in ${targetLanguage}. Provide 2 neutral, clear sentences explaining the concept with zero bias.`;
+        const systemPrompt = fewShotDemonstrations
+          ? injectFewShotSystemPrompt(baseSystemPrompt, fewShotDemonstrations)
+          : baseSystemPrompt;
         const userPrompt = `Define "${word}" in plain, non-partisan language.`;
 
         const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -149,6 +180,7 @@ export async function POST(req: NextRequest) {
               definition,
               source: "openai",
               hashKey,
+              fewShotInjected: Boolean(fewShotDemonstrations),
             });
           }
         }
