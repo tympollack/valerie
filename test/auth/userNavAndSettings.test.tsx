@@ -24,12 +24,16 @@ vi.mock("@/app/actions/auth", async (importOriginal) => {
 
 // Mock Supabase client
 const mockSignOut = vi.fn().mockResolvedValue({ error: null })
+let authStateCallback: ((event: string, session: any) => void) | null = null
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
       signOut: mockSignOut,
-      onAuthStateChange: vi.fn().mockReturnValue({
-        data: { subscription: { unsubscribe: vi.fn() } },
+      onAuthStateChange: vi.fn((cb) => {
+        authStateCallback = cb
+        return {
+          data: { subscription: { unsubscribe: vi.fn() } },
+        }
       }),
     },
   }),
@@ -89,6 +93,60 @@ describe("UserNav Component", () => {
 
     expect(screen.getByText(/Bob Smith/i)).toBeInTheDocument()
     expect(screen.getByText("Unverified")).toBeInTheDocument()
+  })
+
+  it("preserves SSR authenticated identity when onAuthStateChange emits initial null session", () => {
+    const verifiedContext: UserContext = {
+      authenticated: true,
+      userId: "usr-verified-1234",
+      email: "citizen@sunshade.icu",
+      displayName: "Alice Citizen",
+      isHumanVerified: true,
+      verificationTier: "COMMUNITY_VERIFIED",
+      trustState: "active",
+    }
+
+    render(<UserNav initialUserContext={verifiedContext} />)
+
+    // Simulate initial null browser session event emitted on mount
+    act(() => {
+      authStateCallback?.("INITIAL_SESSION", null)
+    })
+
+    expect(screen.getByText(/Alice Citizen/i)).toBeInTheDocument()
+    expect(screen.getByText(/Verified Human/i)).toBeInTheDocument()
+  })
+
+  it("does not inherit previous user's verification badge when a different user signs in", () => {
+    const aliceVerifiedContext: UserContext = {
+      authenticated: true,
+      userId: "usr-alice-1111",
+      email: "alice@sunshade.icu",
+      displayName: "Alice Citizen",
+      isHumanVerified: true,
+      verificationTier: "ANCHOR",
+      trustState: "active",
+    }
+
+    render(<UserNav initialUserContext={aliceVerifiedContext} />)
+    expect(screen.getByText(/Alice Citizen/i)).toBeInTheDocument()
+    expect(screen.getByText(/Verified Human/i)).toBeInTheDocument()
+
+    // Simulate Bob (unverified) signing in
+    act(() => {
+      authStateCallback?.("SIGNED_IN", {
+        user: {
+          id: "usr-bob-2222",
+          email: "bob@sunshade.icu",
+          user_metadata: { full_name: "Bob Smith" },
+          app_metadata: { is_human: false, anti_sybil_verified: false, verification_tier: "UNVERIFIED" },
+        },
+      })
+    })
+
+    expect(screen.getByText(/Bob Smith/i)).toBeInTheDocument()
+    expect(screen.getByText("Unverified")).toBeInTheDocument()
+    expect(screen.queryByText(/Verified Human/i)).not.toBeInTheDocument()
   })
 
   it("opens popover menu and triggers sign out", async () => {

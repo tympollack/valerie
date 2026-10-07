@@ -582,8 +582,8 @@ export function BivariatePollCard({
                     <a
                       href={
                         returnUrl
-                          ? `https://auth.sunshade.icu/verify?return_to=${encodeURIComponent(returnUrl)}`
-                          : "https://auth.sunshade.icu/verify"
+                          ? `https://hub.sunshade.icu/login?redirect=${encodeURIComponent(returnUrl)}&verify=true`
+                          : "https://hub.sunshade.icu/dashboard"
                       }
                       target="_blank"
                       rel="noreferrer"
@@ -605,8 +605,8 @@ export function BivariatePollCard({
                     <a
                       href={
                         returnUrl
-                          ? `https://auth.sunshade.icu/login?return_to=${encodeURIComponent(returnUrl)}`
-                          : "https://auth.sunshade.icu/login"
+                          ? `https://hub.sunshade.icu/login?redirect=${encodeURIComponent(returnUrl)}`
+                          : "https://hub.sunshade.icu/login"
                       }
                       className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-cyan-400"
                     >

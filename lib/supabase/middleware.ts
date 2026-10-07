@@ -12,7 +12,13 @@ import {
 } from "@/lib/auth/ssoHandshake";
 
 export async function updateSession(request: NextRequest) {
+  // Sanitize incoming headers to prevent client header spoofing
   const requestHeaders = new Headers(request.headers);
+  requestHeaders.delete("x-user-id");
+  requestHeaders.delete("x-is-human-verified");
+  requestHeaders.delete("x-verification-tier");
+  requestHeaders.delete("x-trust-state");
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -26,6 +32,17 @@ export async function updateSession(request: NextRequest) {
   let isHumanVerified = false;
   let verificationTier: VerificationTier = "UNVERIFIED";
   let trustState: TrustState = "active";
+
+  // Helper to preserve rotated session cookies on every response path (including early returns)
+  const withCookies = (response: NextResponse): NextResponse => {
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      response.cookies.set(cookie.name, cookie.value, {
+        ...cookie,
+        ...cookieDomainOpts,
+      });
+    });
+    return response;
+  };
 
   // 1. Supabase SSR Session Refresh & User Validation
   if (supabaseUrl && supabaseKey) {
@@ -67,12 +84,26 @@ export async function updateSession(request: NextRequest) {
     } catch {
       // Offline fallback to direct SSO handshake token parsing
     }
+
+    // Synchronize refreshed cookies to downstream request headers
+    const refreshedCookieHeader = request.cookies
+      .getAll()
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+    if (refreshedCookieHeader) {
+      requestHeaders.set("cookie", refreshedCookieHeader);
+    }
   }
 
   // 2. Fallback: Parse Wildcard .sunshade.icu SSO Cookies / JWTs directly
   if (!userId) {
     try {
-      const handshake = await validateSSOHandshake(request);
+      const handshake = await validateSSOHandshake(request, {
+        secret: process.env.SUPABASE_JWT_SECRET,
+        expectedIssuer: process.env.SSO_EXPECTED_ISSUER || "https://hub.sunshade.icu",
+        expectedAudience: process.env.SSO_EXPECTED_AUDIENCE || "authenticated",
+        requireSignature: process.env.NODE_ENV === "production",
+      });
       if (handshake.authenticated && handshake.userId) {
         userId = handshake.userId;
         isHumanVerified = handshake.isHumanVerified;
@@ -127,23 +158,31 @@ export async function updateSession(request: NextRequest) {
     // Unauthenticated rejection
     if (!userId) {
       if (isApiOrAction) {
-        return NextResponse.json(
-          { error: "Unauthorized: Authentication required to vote." },
-          { status: 401 }
+        return withCookies(
+          NextResponse.json(
+            { error: "Unauthorized: Authentication required to vote." },
+            { status: 401 }
+          )
         );
       }
-      return NextResponse.redirect(new URL(buildSSOLoginRedirect(request.url)));
+      return withCookies(
+        NextResponse.redirect(new URL(buildSSOLoginRedirect(request.url)))
+      );
     }
 
     // Unverified anti-Sybil rejection
     if (!isHumanVerified || trustState !== "active") {
       if (isApiOrAction) {
-        return NextResponse.json(
-          { error: "Forbidden: Single-human anti-Sybil verification required." },
-          { status: 403 }
+        return withCookies(
+          NextResponse.json(
+            { error: "Forbidden: Single-human anti-Sybil verification required." },
+            { status: 403 }
+          )
         );
       }
-      return NextResponse.redirect(new URL(buildSSOVerifyRedirect(request.url)));
+      return withCookies(
+        NextResponse.redirect(new URL(buildSSOVerifyRedirect(request.url)))
+      );
     }
   }
 
@@ -154,12 +193,5 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
-  supabaseResponse.cookies.getAll().forEach((cookie) => {
-    finalResponse.cookies.set(cookie.name, cookie.value, {
-      ...cookie,
-      ...cookieDomainOpts,
-    });
-  });
-
-  return finalResponse;
+  return withCookies(finalResponse);
 }
