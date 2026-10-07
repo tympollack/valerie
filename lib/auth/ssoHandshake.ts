@@ -172,20 +172,30 @@ export function extractSSOToken(input: unknown): string | null {
   }
 
   // 3. Cookies map / Cookies store / NextRequest cookies
-  if (record.cookies && typeof record.cookies === "object") {
-    const cookies = record.cookies as {
-      get?: (name: string) => { value?: string } | undefined;
-      getAll?: () => Array<{ name: string; value: string }>;
-    };
-    if (typeof cookies.get === "function") {
+  const cookiesObj =
+    record.cookies && typeof record.cookies === "object"
+      ? (record.cookies as {
+          get?: (name: string) => { value?: string } | undefined;
+          getAll?: () => Array<{ name: string; value: string }>;
+        })
+      : typeof (record as { get?: unknown; getAll?: unknown }).get === "function" ||
+        typeof (record as { get?: unknown; getAll?: unknown }).getAll === "function"
+      ? (record as {
+          get?: (name: string) => { value?: string } | undefined;
+          getAll?: () => Array<{ name: string; value: string }>;
+        })
+      : null;
+
+  if (cookiesObj) {
+    if (typeof cookiesObj.get === "function") {
       for (const name of SUNSHADE_COOKIE_NAMES) {
-        const c = cookies.get(name);
+        const c = cookiesObj.get(name);
         if (c && c.value) return c.value;
       }
     }
 
-    if (typeof cookies.getAll === "function") {
-      const all = cookies.getAll();
+    if (typeof cookiesObj.getAll === "function") {
+      const all = cookiesObj.getAll();
       for (const c of all) {
         if (c.name.startsWith("sb-") && c.name.endsWith("-auth-token")) {
           try {
@@ -485,6 +495,7 @@ export interface ValidateSSOHandshakeOptions {
   requireAntiSybil?: boolean;
   secret?: string;
   expectedIssuer?: string;
+  expectedAudience?: string;
 }
 
 /**
@@ -511,6 +522,7 @@ export async function validateSSOHandshake(
   const verification = await verifySSOToken(token, {
     secret: options.secret,
     expectedIssuer: options.expectedIssuer,
+    expectedAudience: options.expectedAudience,
   });
 
   if (!verification.valid || !verification.payload) {

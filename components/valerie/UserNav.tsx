@@ -69,8 +69,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       const supabase = createClient()
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (!session?.user) {
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
+        // Only clear user context on explicit SIGNED_OUT event.
+        // For SSO-only visitors, the client-side Supabase instance initially receives
+        // a null browser session (INITIAL_SESSION) while server-side context is already
+        // verified via wildcard .sunshade.icu SSO cookies. Overwriting context on
+        // initial null session falsely signs SSO users out.
+        if (event === "SIGNED_OUT") {
           setUserContext({
             authenticated: false,
             userId: null,
@@ -80,6 +85,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             verificationTier: "UNVERIFIED",
             trustState: "active",
           })
+        } else if (session?.user) {
+          setUserContext((prev) => ({
+            ...prev,
+            authenticated: true,
+            userId: session.user.id,
+            email: session.user.email || prev.email,
+          }))
         }
       })
 

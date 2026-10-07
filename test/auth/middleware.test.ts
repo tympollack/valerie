@@ -188,5 +188,45 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       const res = await updateSession(req);
       expect(res.status).toBe(200);
     });
+
+    it("strips client-supplied spoofed headers on unauthenticated requests", async () => {
+      const req = new NextRequest("https://valerie.sunshade.icu/", {
+        headers: {
+          "x-user-id": "attacker-spoofed-id",
+          "x-is-human-verified": "true",
+        },
+      });
+
+      const res = await updateSession(req);
+      expect(res.status).toBe(200);
+      expect(req.headers.get("x-user-id")).toBeNull();
+      expect(req.headers.get("x-is-human-verified")).toBeNull();
+    });
+
+    it("rejects tokens with untrusted issuer during SSO fallback", async () => {
+      const untrustedIssuerJWT = createMockJWT({
+        sub: "user-attacker-123",
+        exp: nowSec + 3600,
+        nbf: nowSec - 60,
+        iss: "https://evil-phishing.com",
+        app_metadata: {
+          is_human: true,
+          anti_sybil_verified: true,
+          verification_tier: "ANCHOR",
+          trust_state: "active",
+        },
+      });
+
+      const req = new NextRequest("https://valerie.sunshade.icu/vote", {
+        method: "POST",
+        headers: {
+          cookie: `sunshade_sso=${untrustedIssuerJWT}`,
+          "next-action": "action_submit_vote",
+        },
+      });
+
+      const res = await updateSession(req);
+      expect(res.status).toBe(401);
+    });
   });
 });

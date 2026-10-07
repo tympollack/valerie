@@ -47,7 +47,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 
 // ---------------------------------------------------------------------------
 // Public types — imported by VotingCard and any other voting UI consumer
@@ -74,35 +73,19 @@ export interface VoteResult {
 export async function submitVote(payload: VotePayload): Promise<VoteResult> {
   const supabase = await createClient();
 
-  // --- Auth: validate session server-side (never trust client-passed user IDs)
+  // --- Auth: validate session server-side (never trust client-passed user IDs or unverified request headers)
   const {
     data: { user },
     error: authError,
   } = await supabase.auth.getUser();
 
-  let resolvedUserId = user?.id;
-  let isHuman = false;
-  let trustState = "active";
-
-  if (user) {
-    const antiSybilProof = extractAntiSybilProof(user);
-    isHuman = antiSybilProof.isHuman;
-    trustState = antiSybilProof.trustState;
-  } else {
-    // Defense-in-depth: Check verified headers injected by middleware
-    try {
-      const headerList = await headers();
-      resolvedUserId = headerList.get("x-user-id") || undefined;
-      isHuman = headerList.get("x-is-human-verified") === "true";
-      trustState = headerList.get("x-trust-state") || "active";
-    } catch {
-      // In non-request contexts
-    }
-  }
-
-  if (!resolvedUserId) {
+  if (authError || !user) {
     return { success: false, error: "You must be signed in to vote." };
   }
+
+  const antiSybilProof = extractAntiSybilProof(user);
+  const isHuman = antiSybilProof.isHuman;
+  const trustState = antiSybilProof.trustState;
 
   // --- Anti-Sybil Verification check (Defense-in-depth before DB RLS hard gate)
   if (!isHuman || trustState !== "active") {
@@ -111,6 +94,8 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       error: "Single-human identity verification required. Please complete verification on the SunShade Hub.",
     };
   }
+
+  const resolvedUserId = user.id;
 
   const { pollId, likertScore, confidenceScore, comment, h3HexIndex } = payload;
 
