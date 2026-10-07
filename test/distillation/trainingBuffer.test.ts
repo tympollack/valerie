@@ -24,57 +24,34 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { POST } from "@/app/api/simplify-word/route";
+import {
+  formatLoraJsonl,
+  parseLoraDatasetJsonl,
+  exportLoraDataset,
+  type LoRAPair,
+} from "@/lib/ai/trainingBuffer";
 
 describe("Teacher-Student Training Buffer Pipeline (TASK-VAL-TRAIN-BUFFER)", () => {
   describe("LoRA Dataset Export Format (JSONL schema compliance)", () => {
-    interface LoRAPair {
-      prompt: string;
-      completion: string;
-      task_type: "TOOLTIP_SIMPLIFY" | "SENTIMENT_CLASSIFY" | "CLUSTER_NAMING";
-      messages: Array<{ role: "user" | "assistant"; content: string }>;
-    }
-
-    function formatLoraJsonl(
-      pairs: Array<{ prompt_input: string; completion_output: string; task_type: string }>,
-      limit?: number
-    ): string {
-      const slice = limit ? pairs.slice(0, limit) : pairs;
-      return slice
-        .map((p) =>
-          JSON.stringify({
-            prompt: p.prompt_input,
-            completion: p.completion_output,
-            task_type: p.task_type,
-            messages: [
-              { role: "user", content: p.prompt_input },
-              { role: "assistant", content: p.completion_output },
-            ],
-          })
-        )
-        .join("\n");
-    }
-
     it("generates newline-delimited JSON with valid syntax per line", () => {
       const mockPairs = [
         {
           prompt_input: "pedestrian-only zone",
           completion_output: "An urban area restricted to foot traffic where motorized vehicles are prohibited.",
-          task_type: "TOOLTIP_SIMPLIFY",
+          task_type: "TOOLTIP_SIMPLIFY" as const,
         },
         {
           prompt_input: "congestion pricing",
           completion_output: "A fee charged to motorists entering busy downtown zones during peak traffic hours.",
-          task_type: "TOOLTIP_SIMPLIFY",
+          task_type: "TOOLTIP_SIMPLIFY" as const,
         },
       ];
 
       const jsonl = formatLoraJsonl(mockPairs);
-      const lines = jsonl.split("\n");
-      expect(lines).toHaveLength(2);
+      const parsedList = parseLoraDatasetJsonl(jsonl);
+      expect(parsedList).toHaveLength(2);
 
-      for (const line of lines) {
-        expect(() => JSON.parse(line)).not.toThrow();
-        const parsed: LoRAPair = JSON.parse(line);
+      for (const parsed of parsedList) {
         expect(parsed).toHaveProperty("prompt");
         expect(parsed).toHaveProperty("completion");
         expect(parsed).toHaveProperty("task_type", "TOOLTIP_SIMPLIFY");
@@ -88,7 +65,7 @@ describe("Teacher-Student Training Buffer Pipeline (TASK-VAL-TRAIN-BUFFER)", () 
       const mockPairs = Array.from({ length: 15 }, (_, i) => ({
         prompt_input: `concept-${i}`,
         completion_output: `Definition for concept ${i} with sufficient text length.`,
-        task_type: "TOOLTIP_SIMPLIFY",
+        task_type: "TOOLTIP_SIMPLIFY" as const,
       }));
 
       const exported = formatLoraJsonl(mockPairs, 5);
@@ -104,9 +81,40 @@ describe("Teacher-Student Training Buffer Pipeline (TASK-VAL-TRAIN-BUFFER)", () 
           completion_output: "sample output",
           task_type: task,
         };
-        const parsed = JSON.parse(formatLoraJsonl([item]));
+        const parsed = parseLoraDatasetJsonl(formatLoraJsonl([item]))[0];
         expect(parsed.task_type).toBe(task);
       }
+    });
+
+    it("invokes export_lora_dataset RPC via production exportLoraDataset client utility", async () => {
+      const mockJsonl = JSON.stringify({
+        prompt: "test",
+        completion: "test completion",
+        task_type: "TOOLTIP_SIMPLIFY",
+        messages: [
+          { role: "user", content: "test" },
+          { role: "assistant", content: "test completion" },
+        ],
+      });
+
+      const mockClient = {
+        rpc: vi.fn().mockResolvedValue({
+          data: mockJsonl,
+          error: null,
+        }),
+      };
+
+      const result = await exportLoraDataset({
+        supabaseClient: mockClient,
+        limit: 10,
+        taskType: "TOOLTIP_SIMPLIFY",
+      });
+
+      expect(mockClient.rpc).toHaveBeenCalledWith("export_lora_dataset", {
+        p_limit: 10,
+        p_task_type: "TOOLTIP_SIMPLIFY",
+      });
+      expect(result).toBe(mockJsonl);
     });
   });
 

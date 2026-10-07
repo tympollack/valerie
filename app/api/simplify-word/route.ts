@@ -49,7 +49,28 @@ export async function POST(req: NextRequest) {
     const word = (body.word ?? "").toString().trim();
     const targetLanguage = (body.targetLanguage ?? "en").toString().trim().slice(0, 10);
     const targetReadingLevel = (body.targetReadingLevel ?? "general").toString().trim().slice(0, 20);
-    const embedding = Array.isArray(body.embedding) ? (body.embedding as number[]) : undefined;
+
+    let embedding: number[] | undefined;
+    if (body.embedding !== undefined) {
+      if (
+        Array.isArray(body.embedding) &&
+        body.embedding.length > 0 &&
+        body.embedding.length <= 1536 &&
+        body.embedding.every(
+          (val: unknown) => typeof val === "number" && Number.isFinite(val)
+        )
+      ) {
+        embedding = body.embedding;
+      } else {
+        return NextResponse.json(
+          {
+            error:
+              "The 'embedding' field, if provided, must be a non-empty array of at most 1536 finite numbers.",
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     if (!word || word.length > 200) {
       return NextResponse.json(

@@ -7,6 +7,7 @@ import {
   estimateTokenCount,
   buildDynamicFewShotPrompt,
   clearFewShotCache,
+  generateCacheKey,
   type FewShotExample,
 } from "@/lib/ai/fewShotInjector";
 
@@ -162,13 +163,126 @@ describe("Dynamic Few-Shot Semantic RAG Injection Engine (TASK-VAL-FEWSHOT-RAG)"
     });
   });
 
+  describe("Cache Key Collision Prevention", () => {
+    it("differentiates embeddings that differ only in middle coordinates", () => {
+      const vecA = Array.from({ length: 1536 }, () => 0.1);
+      const vecB = Array.from({ length: 1536 }, () => 0.1);
+
+      // Modify a middle element
+      vecB[750] = 0.999;
+
+      const keyA = generateCacheKey(vecA, "en", "general", 3);
+      const keyB = generateCacheKey(vecB, "en", "general", 3);
+
+      expect(keyA).not.toBe(keyB);
+    });
+  });
+
+  describe("Demonstration Sanitization & SHA-256 Hash Filtering", () => {
+    it("excludes raw 64-char hex hashes from appearing as demonstration terms", async () => {
+      const rawHexHash = "a".repeat(64);
+      const mockClient = {
+        rpc: vi.fn().mockResolvedValue({
+          data: [
+            {
+              id: "1",
+              original_text: rawHexHash, // Older cache row without clean word
+              cached_translation: "Some legacy cached definition.",
+              similarity: 0.99,
+            },
+            {
+              id: "2",
+              original_text: "congestion pricing",
+              cached_translation: "A peak-hour fee charged to motorists.",
+              similarity: 0.92,
+            },
+          ],
+          error: null,
+        }),
+      };
+
+      const dummyEmbedding = Array.from({ length: 1536 }, () => 0.04);
+      const examples = await fetchTopSemanticExamples(dummyEmbedding, {
+        supabaseClient: mockClient,
+        limit: 3,
+      });
+
+      // Must never include the 64-character hash as a term
+      for (const ex of examples) {
+        expect(ex.term).not.toBe(rawHexHash);
+        expect(ex.term).not.toMatch(/^[a-f0-9]{64}$/i);
+      }
+      expect(examples).toHaveLength(3);
+    });
+
+    it("does not store fallback results in the persistent cache during database outage", async () => {
+      const mockFailingClient = {
+        rpc: vi.fn().mockRejectedValue(new Error("Database disconnected")),
+        schema: vi.fn().mockImplementation(() => ({
+          from: () => ({
+            select: () => ({
+              not: () => ({
+                limit: vi.fn().mockRejectedValue(new Error("Timeout")),
+              }),
+            }),
+          }),
+        })),
+      };
+
+      const dummyEmbedding = Array.from({ length: 1536 }, () => 0.08);
+
+      // Fetch during outage (returns fallback results)
+      const fallbackExamples = await fetchTopSemanticExamples(dummyEmbedding, {
+        supabaseClient: mockFailingClient,
+        limit: 3,
+      });
+      expect(fallbackExamples).toHaveLength(3);
+
+      // Now simulate database recovery with real DB data
+      const mockRecoveredClient = {
+        rpc: vi.fn().mockResolvedValue({
+          data: [
+            {
+              id: "recovered-1",
+              original_text: "recovered concept",
+              cached_translation: "Recovered fresh definition from DB.",
+              similarity: 0.98,
+            },
+          ],
+          error: null,
+        }),
+      };
+
+      const recoveredExamples = await fetchTopSemanticExamples(dummyEmbedding, {
+        supabaseClient: mockRecoveredClient,
+        limit: 3,
+      });
+
+      // Verifies that the previous fallback didn't lock the cache
+      expect(mockRecoveredClient.rpc).toHaveBeenCalled();
+      expect(recoveredExamples[0].term).toBe("recovered concept");
+    });
+  });
+
   describe("Latency Overhead & Token Benchmarking (<50ms constraint)", () => {
-    it("executes retrieval, formatting, and injection under 50ms", async () => {
+    it("executes retrieval, formatting, and injection under 50ms with isolated mock client", async () => {
       const dummyEmbedding = Array.from({ length: 1536 }, () => 0.03);
+
+      const mockFastClient = {
+        rpc: vi.fn().mockResolvedValue({
+          data: [
+            { id: "1", original_text: "concept A", cached_translation: "Definition A.", similarity: 0.9 },
+            { id: "2", original_text: "concept B", cached_translation: "Definition B.", similarity: 0.8 },
+            { id: "3", original_text: "concept C", cached_translation: "Definition C.", similarity: 0.7 },
+          ],
+          error: null,
+        }),
+      };
 
       const result = await buildDynamicFewShotPrompt({
         baseSystemPrompt: "You are an educator.",
         embedding: dummyEmbedding,
+        options: { supabaseClient: mockFastClient },
       });
 
       expect(result.examples).toHaveLength(3);
@@ -181,16 +295,29 @@ describe("Dynamic Few-Shot Semantic RAG Injection Engine (TASK-VAL-FEWSHOT-RAG)"
     it("serves subsequent queries from in-memory cache in sub-millisecond time", async () => {
       const dummyEmbedding = Array.from({ length: 1536 }, () => 0.05);
 
+      const mockFastClient = {
+        rpc: vi.fn().mockResolvedValue({
+          data: [
+            { id: "1", original_text: "concept A", cached_translation: "Definition A.", similarity: 0.9 },
+            { id: "2", original_text: "concept B", cached_translation: "Definition B.", similarity: 0.8 },
+            { id: "3", original_text: "concept C", cached_translation: "Definition C.", similarity: 0.7 },
+          ],
+          error: null,
+        }),
+      };
+
       // Prime the cache
       await buildDynamicFewShotPrompt({
         baseSystemPrompt: "Base prompt",
         embedding: dummyEmbedding,
+        options: { supabaseClient: mockFastClient },
       });
 
       // Second retrieval (cache hit)
       const cachedResult = await buildDynamicFewShotPrompt({
         baseSystemPrompt: "Base prompt",
         embedding: dummyEmbedding,
+        options: { supabaseClient: mockFastClient },
       });
 
       expect(cachedResult.examples).toHaveLength(3);

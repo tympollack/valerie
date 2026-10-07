@@ -85,18 +85,37 @@ const FALLBACK_FEW_SHOT_CORPUS: Array<{ term: string; definition: string; embedd
 ];
 
 /**
- * Generates cache key from query embedding vector sample and locale filters.
+ * Generates deterministic cache key across the complete embedding vector plus locale/limit.
+ * Uses 64-bit dual-prime FNV-1a hash over the Float32Array representation to prevent collisions.
  */
-function generateCacheKey(
+export function generateCacheKey(
   embedding: number[],
   language: string,
   readingLevel: string,
   limit: number
 ): string {
-  // Use first 5 and last 5 elements as a fast structural signature
-  const head = embedding.slice(0, 5).map((n) => n.toFixed(4)).join(",");
-  const tail = embedding.slice(-5).map((n) => n.toFixed(4)).join(",");
-  return `${language}:${readingLevel}:${limit}:${head}...${tail}`;
+  const float32 = new Float32Array(embedding);
+  const uint8 = new Uint8Array(float32.buffer);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x27d4eb2f;
+  for (let i = 0; i < uint8.length; i++) {
+    h1 ^= uint8[i];
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= uint8[i];
+    h2 = Math.imul(h2, 0x5bd1e995);
+  }
+  const hexHash =
+    (h1 >>> 0).toString(16).padStart(8, "0") +
+    (h2 >>> 0).toString(16).padStart(8, "0");
+  return `${language}:${readingLevel}:${limit}:${hexHash}`;
+}
+
+const SHA256_REGEX = /^[a-f0-9]{64}$/i;
+
+function isValidDemonstrationTerm(term?: string | null): term is string {
+  if (!term || typeof term !== "string") return false;
+  const clean = term.trim();
+  return clean.length > 0 && !SHA256_REGEX.test(clean);
 }
 
 /**
@@ -142,13 +161,36 @@ export async function fetchTopSemanticExamples(
       });
 
       if (!error && Array.isArray(data) && data.length > 0) {
-        const results: FewShotExample[] = data.map((row: any) => ({
-          term: row.original_text || row.original_text_hash || "Civic Concept",
-          definition: row.cached_translation,
-          similarity: typeof row.similarity === "number" ? row.similarity : undefined,
-        }));
-        fewShotMemoryCache.set(cacheKey, results);
-        return results;
+        const validRows = data.filter(
+          (row: any) =>
+            isValidDemonstrationTerm(row.original_text) &&
+            Boolean(row.cached_translation)
+        );
+
+        if (validRows.length > 0) {
+          const results: FewShotExample[] = validRows.slice(0, limit).map((row: any) => ({
+            term: row.original_text.trim(),
+            definition: row.cached_translation,
+            similarity: typeof row.similarity === "number" ? row.similarity : undefined,
+          }));
+
+          // Backfill up to limit from fallback corpus if needed
+          if (results.length < limit) {
+            for (const item of FALLBACK_FEW_SHOT_CORPUS) {
+              if (results.length >= limit) break;
+              if (!results.some((r) => r.term === item.term)) {
+                results.push({
+                  term: item.term,
+                  definition: item.definition,
+                  similarity: item.embeddingSeed,
+                });
+              }
+            }
+          }
+
+          fewShotMemoryCache.set(cacheKey, results);
+          return results;
+        }
       }
     } catch {
       // Fall through to direct query or corpus fallback
@@ -161,29 +203,36 @@ export async function fetchTopSemanticExamples(
         .from("content_cache")
         .select("original_text, original_text_hash, cached_translation")
         .not("cached_translation", "is", null)
-        .limit(limit);
+        .limit(limit * 2);
 
       if (!error && Array.isArray(data) && data.length > 0) {
-        const results: FewShotExample[] = data.map((row: any) => ({
-          term: row.original_text || row.original_text_hash || "Civic Concept",
-          definition: row.cached_translation,
-        }));
-        fewShotMemoryCache.set(cacheKey, results);
-        return results;
+        const validRows = data.filter(
+          (row: any) =>
+            isValidDemonstrationTerm(row.original_text) &&
+            Boolean(row.cached_translation)
+        );
+
+        if (validRows.length > 0) {
+          const results: FewShotExample[] = validRows.slice(0, limit).map((row: any) => ({
+            term: row.original_text.trim(),
+            definition: row.cached_translation,
+          }));
+          fewShotMemoryCache.set(cacheKey, results);
+          return results;
+        }
       }
     } catch {
       // Fall through to fallback demonstration corpus
     }
   }
 
-  // Fallback: Return top matches from fallback corpus
+  // Fallback: Return top matches from fallback corpus without polluting cache with transient failure data
   const fallbackResults: FewShotExample[] = FALLBACK_FEW_SHOT_CORPUS.slice(0, limit).map((item) => ({
     term: item.term,
     definition: item.definition,
     similarity: item.embeddingSeed,
   }));
 
-  fewShotMemoryCache.set(cacheKey, fallbackResults);
   return fallbackResults;
 }
 
