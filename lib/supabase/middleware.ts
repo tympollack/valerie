@@ -99,8 +99,10 @@ export async function updateSession(request: NextRequest) {
   if (!userId) {
     try {
       const handshake = await validateSSOHandshake(request, {
+        secret: process.env.SUPABASE_JWT_SECRET,
         expectedIssuer: process.env.SSO_EXPECTED_ISSUER || "https://hub.sunshade.icu",
         expectedAudience: process.env.SSO_EXPECTED_AUDIENCE || "authenticated",
+        requireSignature: process.env.NODE_ENV === "production",
       });
       if (handshake.authenticated && handshake.userId) {
         userId = handshake.userId;

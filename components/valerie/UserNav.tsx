@@ -24,6 +24,7 @@ import {
 } from "lucide-react"
 import { type UserContext, signOutAction } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/client"
+import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
 
 interface UserNavProps {
@@ -86,12 +87,33 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             trustState: "active",
           })
         } else if (session?.user) {
-          setUserContext((prev) => ({
-            ...prev,
-            authenticated: true,
-            userId: session.user.id,
-            email: session.user.email || prev.email,
-          }))
+          const freshProof = extractAntiSybilProof(session.user)
+          const isHumanVerified = freshProof.isHuman && freshProof.trustState === "active"
+          const email = session.user.email || null
+          const displayName =
+            (session.user.user_metadata?.full_name as string) ||
+            (session.user.user_metadata?.name as string) ||
+            (session.user.user_metadata?.display_name as string) ||
+            (email ? email.split("@")[0] : null)
+
+          setUserContext((prev) => {
+            const isDifferentUser = prev.userId && prev.userId !== session.user.id
+            if (isDifferentUser) {
+              router.refresh()
+            }
+            return {
+              authenticated: true,
+              userId: session.user.id,
+              email,
+              displayName,
+              isHumanVerified,
+              verificationTier: freshProof.verificationTier,
+              trustState: freshProof.trustState,
+              nullifierHash: freshProof.nullifierHash,
+              provider: freshProof.provider,
+              score: freshProof.score,
+            }
+          })
         }
       })
 

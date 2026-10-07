@@ -263,6 +263,46 @@ describe("Cross-Domain SSO & Cookie Parsing (lib/auth/ssoHandshake.ts)", () => {
       expect(res.isHumanVerified).toBe(false);
       expect(res.error).toMatch(/verification required/i);
     });
+
+    it("rejects token missing issuer claim when expectedIssuer is specified", async () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const token = createTestJWT({
+        sub: "user-missing-iss",
+        exp: nowSec + 3600,
+      });
+
+      const res = await verifySSOToken(token, { expectedIssuer: "https://hub.sunshade.icu" });
+      expect(res.valid).toBe(false);
+      expect(res.error).toMatch(/missing required issuer/i);
+    });
+
+    it("rejects token missing audience claim when expectedAudience is specified", async () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const token = createTestJWT({
+        sub: "user-missing-aud",
+        exp: nowSec + 3600,
+        iss: "https://hub.sunshade.icu",
+      });
+
+      const res = await verifySSOToken(token, {
+        expectedIssuer: "https://hub.sunshade.icu",
+        expectedAudience: "authenticated",
+      });
+      expect(res.valid).toBe(false);
+      expect(res.error).toMatch(/missing required audience/i);
+    });
+
+    it("rejects token when requireSignature is true but secret is unconfigured", async () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const token = createTestJWT({
+        sub: "user-test",
+        exp: nowSec + 3600,
+      });
+
+      const res = await verifySSOToken(token, { requireSignature: true });
+      expect(res.valid).toBe(false);
+      expect(res.error).toMatch(/secret not configured|secret missing/i);
+    });
   });
 
   describe("buildSSOLoginRedirect & buildSSOVerifyRedirect (Hub SSO)", () => {

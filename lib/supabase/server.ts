@@ -4,7 +4,14 @@ import { extractSSOToken } from "@/lib/auth/ssoHandshake";
 
 export async function createClient() {
   const cookieStore = await cookies();
-  const ssoToken = extractSSOToken(cookieStore);
+  const allCookies = cookieStore.getAll();
+  const hasSupabaseSession = allCookies.some(
+    (c) => c.name.startsWith("sb-") && c.name.includes("-auth-token")
+  );
+
+  // Let Supabase SSR supply its own session bearer when present; only attach
+  // separate SSO bearer when no native Supabase session exists.
+  const ssoToken = !hasSupabaseSession ? extractSSOToken(cookieStore) : null;
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

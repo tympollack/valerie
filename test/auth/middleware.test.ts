@@ -30,6 +30,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
     exp: nowSec + 3600,
     nbf: nowSec - 60,
     iss: "https://hub.sunshade.icu",
+    aud: "authenticated",
     app_metadata: {
       is_human: true,
       anti_sybil_verified: true,
@@ -43,6 +44,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
     exp: nowSec + 3600,
     nbf: nowSec - 60,
     iss: "https://hub.sunshade.icu",
+    aud: "authenticated",
     app_metadata: {
       is_human: false,
       anti_sybil_verified: false,
@@ -56,6 +58,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
     exp: nowSec + 3600,
     nbf: nowSec - 60,
     iss: "https://hub.sunshade.icu",
+    aud: "authenticated",
     app_metadata: {
       is_human: true,
       anti_sybil_verified: true,
@@ -210,6 +213,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
         exp: nowSec + 3600,
         nbf: nowSec - 60,
         iss: "https://evil-phishing.com",
+        aud: "authenticated",
         app_metadata: {
           is_human: true,
           anti_sybil_verified: true,
@@ -222,6 +226,33 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
         method: "POST",
         headers: {
           cookie: `sunshade_sso=${untrustedIssuerJWT}`,
+          "next-action": "action_submit_vote",
+        },
+      });
+
+      const res = await updateSession(req);
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects tokens with untrusted audience during SSO fallback", async () => {
+      const untrustedAudienceJWT = createMockJWT({
+        sub: "user-attacker-456",
+        exp: nowSec + 3600,
+        nbf: nowSec - 60,
+        iss: "https://hub.sunshade.icu",
+        aud: "malicious-third-party-app",
+        app_metadata: {
+          is_human: true,
+          anti_sybil_verified: true,
+          verification_tier: "ANCHOR",
+          trust_state: "active",
+        },
+      });
+
+      const req = new NextRequest("https://valerie.sunshade.icu/vote", {
+        method: "POST",
+        headers: {
+          cookie: `sunshade_sso=${untrustedAudienceJWT}`,
           "next-action": "action_submit_vote",
         },
       });

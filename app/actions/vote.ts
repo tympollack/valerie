@@ -45,8 +45,9 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake";
+import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 
 // ---------------------------------------------------------------------------
 // Public types — imported by VotingCard and any other voting UI consumer
@@ -74,10 +75,23 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
   const supabase = await createClient();
 
   // --- Auth: validate session server-side (never trust client-passed user IDs or unverified request headers)
-  const {
+  let {
     data: { user },
     error: authError,
   } = await supabase.auth.getUser();
+
+  // If Supabase SSR has no stored session cookie, check for Hub SSO token and validate it with Supabase Auth
+  if (!user) {
+    const cookieStore = await cookies();
+    const ssoToken = extractSSOToken(cookieStore);
+    if (ssoToken) {
+      const { data: ssoData, error: ssoError } = await supabase.auth.getUser(ssoToken);
+      if (!ssoError && ssoData?.user) {
+        user = ssoData.user;
+        authError = null;
+      }
+    }
+  }
 
   if (authError || !user) {
     return { success: false, error: "You must be signed in to vote." };
