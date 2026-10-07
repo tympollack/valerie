@@ -5,6 +5,8 @@ import {
   extractAntiSybilProof,
   verifySSOToken,
   validateSSOHandshake,
+  buildSSOLoginRedirect,
+  buildSSOVerifyRedirect,
 } from "./ssoHandshake";
 
 describe("Cross-Domain SSO & Cookie Parsing (lib/auth/ssoHandshake.ts)", () => {
@@ -260,6 +262,29 @@ describe("Cross-Domain SSO & Cookie Parsing (lib/auth/ssoHandshake.ts)", () => {
       expect(res.authenticated).toBe(true);
       expect(res.isHumanVerified).toBe(false);
       expect(res.error).toMatch(/verification required/i);
+    });
+  });
+
+  describe("buildSSOLoginRedirect & buildSSOVerifyRedirect (Hub SSO)", () => {
+    it("builds login redirect to central hub portal with redirect query param", () => {
+      const redirect = buildSSOLoginRedirect("https://valerie.sunshade.icu/polls/123");
+      expect(redirect).toBe("https://hub.sunshade.icu/login?redirect=https%3A%2F%2Fvalerie.sunshade.icu%2Fpolls%2F123");
+    });
+
+    it("builds verify redirect to central hub portal with verify flag", () => {
+      const redirect = buildSSOVerifyRedirect("https://valerie.sunshade.icu/vote");
+      expect(redirect).toBe("https://hub.sunshade.icu/login?redirect=https%3A%2F%2Fvalerie.sunshade.icu%2Fvote&verify=true");
+    });
+  });
+
+  describe("extractSSOToken with direct cookieStore", () => {
+    it("extracts token from cookieStore object directly", () => {
+      const token = "jwt.direct.store.token";
+      const cookieStore = {
+        get: (name: string) => (name === "sunshade_sso" ? { value: token } : undefined),
+        getAll: () => [{ name: "sunshade_sso", value: token }],
+      };
+      expect(extractSSOToken(cookieStore)).toBe(token);
     });
   });
 });

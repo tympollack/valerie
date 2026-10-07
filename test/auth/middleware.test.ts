@@ -123,7 +123,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       expect(json.error).toMatch(/authentication required/i);
     });
 
-    it("redirects unauthenticated browser navigation on voting routes to auth.sunshade.icu/login", async () => {
+    it("redirects unauthenticated browser navigation on voting routes to hub.sunshade.icu/login", async () => {
       const targetUrl = "https://valerie.sunshade.icu/vote";
       const req = new NextRequest(targetUrl, {
         method: "GET",
@@ -132,8 +132,8 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       const res = await updateSession(req);
       expect(res.status).toBe(307); // NextResponse.redirect default
       const location = res.headers.get("location");
-      expect(location).toContain("auth.sunshade.icu/login");
-      expect(location).toContain(encodeURIComponent(targetUrl));
+      expect(location).toContain("hub.sunshade.icu/login");
+      expect(location).toContain(`redirect=${encodeURIComponent(targetUrl)}`);
     });
 
     it("rejects unverified bot accounts attempting to vote with 403 for API / Action requests", async () => {
@@ -151,7 +151,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       expect(json.error).toMatch(/single-human anti-sybil verification required/i);
     });
 
-    it("redirects unverified accounts on browser navigation to auth.sunshade.icu/verify", async () => {
+    it("redirects unverified accounts on browser navigation to hub.sunshade.icu/login?redirect=...&verify=true", async () => {
       const targetUrl = "https://valerie.sunshade.icu/vote";
       const req = new NextRequest(targetUrl, {
         method: "GET",
@@ -163,8 +163,9 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       const res = await updateSession(req);
       expect(res.status).toBe(307);
       const location = res.headers.get("location");
-      expect(location).toContain("auth.sunshade.icu/verify");
-      expect(location).toContain(encodeURIComponent(targetUrl));
+      expect(location).toContain("hub.sunshade.icu/login");
+      expect(location).toContain(`redirect=${encodeURIComponent(targetUrl)}`);
+      expect(location).toContain("verify=true");
     });
 
     it("rejects slashed accounts even if tier is anchor", async () => {

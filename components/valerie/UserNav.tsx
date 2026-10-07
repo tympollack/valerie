@@ -131,18 +131,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
     window.location.hostname.endsWith(".sunshade.icu")
       ? "https://hub.sunshade.icu"
       : "https://hub.sunshade.icu"
-  const authBaseUrl =
-    typeof window !== "undefined" &&
-    window.location.hostname.endsWith(".sunshade.icu")
-      ? "https://auth.sunshade.icu"
-      : "https://auth.sunshade.icu"
 
   const loginUrl = returnToUrl
-    ? `${authBaseUrl}/login?return_to=${encodeURIComponent(returnToUrl)}`
-    : `${authBaseUrl}/login`
+    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}`
+    : `${hubBaseUrl}/login`
   const verifyUrl = returnToUrl
-    ? `${authBaseUrl}/verify?return_to=${encodeURIComponent(returnToUrl)}`
-    : `${authBaseUrl}/verify`
+    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}&verify=true`
+    : `${hubBaseUrl}/dashboard`
 
   // 1. Unauthenticated State
   if (!userContext.authenticated) {

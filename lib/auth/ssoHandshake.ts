@@ -619,7 +619,7 @@ export function isVotingRoute(pathname: string, method: string = "GET", headers?
  */
 export function buildSSOLoginRedirect(requestUrl: string, rootDomain: string = "sunshade.icu"): string {
   const returnTo = encodeURIComponent(requestUrl);
-  return `https://auth.${rootDomain}/login?return_to=${returnTo}`;
+  return `https://hub.${rootDomain}/login?redirect=${returnTo}`;
 }
 
 /**
@@ -627,6 +627,6 @@ export function buildSSOLoginRedirect(requestUrl: string, rootDomain: string = "
  */
 export function buildSSOVerifyRedirect(requestUrl: string, rootDomain: string = "sunshade.icu"): string {
   const returnTo = encodeURIComponent(requestUrl);
-  return `https://auth.${rootDomain}/verify?return_to=${returnTo}`;
+  return `https://hub.${rootDomain}/login?redirect=${returnTo}&verify=true`;
 }
 
