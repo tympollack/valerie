@@ -13,12 +13,14 @@ vi.mock("next/cache", () => ({
   }),
 }));
 
+let mockCookiesList: Array<{ name: string; value: string }> = [];
+
 // Mock next/headers cookies
 vi.mock("next/headers", () => ({
   cookies: vi.fn().mockImplementation(() =>
     Promise.resolve({
-      getAll: () => [],
-      get: () => undefined,
+      getAll: () => mockCookiesList,
+      get: (name: string) => mockCookiesList.find((c) => c.name === name),
     })
   ),
 }));
@@ -27,6 +29,8 @@ vi.mock("next/headers", () => ({
 let mockRpcResult: { data: any; error: any } = { data: [], error: null };
 let lastRpcName = "";
 let lastRpcParams: Record<string, any> = {};
+let mockUser: { id: string } | null = { id: "test-user-uuid" };
+let mockAuthError: { message: string } | null = null;
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn().mockImplementation(() => ({
@@ -48,6 +52,14 @@ vi.mock("@supabase/supabase-js", () => ({
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn().mockImplementation(() =>
     Promise.resolve({
+      auth: {
+        getUser: vi.fn().mockImplementation(() =>
+          Promise.resolve({
+            data: { user: mockUser },
+            error: mockAuthError,
+          })
+        ),
+      },
       schema: () => ({
         rpc: (name: string, params: Record<string, any>) => {
           lastRpcName = name;
@@ -70,6 +82,11 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
     lastRpcName = "";
     lastRpcParams = {};
     mockRpcResult = { data: [], error: null };
+    mockUser = { id: "test-user-uuid" };
+    mockAuthError = null;
+    mockCookiesList = [
+      { name: "sb-mock-auth-token", value: JSON.stringify({ access_token: "mock-jwt", user: { id: "test-user-uuid" } }) },
+    ];
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://mock.supabase.co";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "mock-anon-key";
   });
@@ -101,28 +118,29 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
       expect(sanitized.children).toEqual([]);
     });
 
-    it("sorts nested children by active_weight descending", () => {
+    it("sorts nested children by active_weight descending and breaks ties by cluster_name", () => {
       const raw = {
         id: "root-uuid",
         cluster_name: "Root",
         active_weight: 100,
         children: [
-          { id: "child-low", cluster_name: "Low Weight", active_weight: 10, children: [] },
-          { id: "child-high", cluster_name: "High Weight", active_weight: 50, children: [] },
-          { id: "child-mid", cluster_name: "Mid Weight", active_weight: 25, children: [] },
+          { id: "child-low", cluster_name: "Zebra Low Weight", active_weight: 10, children: [] },
+          { id: "child-tie-b", cluster_name: "Beta Tie Weight", active_weight: 50, children: [] },
+          { id: "child-tie-a", cluster_name: "Alpha Tie Weight", active_weight: 50, children: [] },
         ],
       };
 
       const sanitized = sanitizeClusterNode(raw);
       expect(sanitized.children).toHaveLength(3);
-      expect(sanitized.children[0].id).toBe("child-high");
-      expect(sanitized.children[1].id).toBe("child-mid");
+      // Both tie at 50, Alpha Tie Weight comes before Beta Tie Weight alphabetically
+      expect(sanitized.children[0].id).toBe("child-tie-a");
+      expect(sanitized.children[1].id).toBe("child-tie-b");
       expect(sanitized.children[2].id).toBe("child-low");
     });
   });
 
   describe("buildNestedClusterTree", () => {
-    it("assembles multi-tier parent-child trees from flat records", () => {
+    it("assembles multi-tier parent-child trees from flat records including descendants", () => {
       const flatNodes: ClusterLineageNode[] = [
         {
           id: "root-1",
@@ -186,7 +204,7 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
   });
 
   describe("getClusterLineage Server Action", () => {
-    it("calls get_cluster_lineage RPC without params when rootId is omitted", async () => {
+    it("assembles complete hierarchy when RPC returns flat rows with descendants", async () => {
       mockRpcResult = {
         data: [
           {
@@ -204,19 +222,35 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
             active_weight: 20,
             children: [],
           },
+          {
+            id: "child-1",
+            cluster_name: "Child Topic",
+            parent_cluster_id: "root-1",
+            depth: 1,
+            path: ["root-1", "child-1"],
+            is_active: true,
+            member_count: 10,
+            variance: 0.05,
+            avg_likert: 1.2,
+            avg_confidence: 80,
+            total_votes: 4,
+            active_weight: 10,
+            children: [],
+          },
         ],
         error: null,
       };
 
       const result = await getClusterLineage();
       expect(result.success).toBe(true);
-      expect(lastRpcName).toBe("get_cluster_lineage");
-      expect(lastRpcParams).toEqual({});
       expect(result.data).toHaveLength(1);
       expect(result.data[0].id).toBe("root-1");
+      expect(result.data[0].children).toHaveLength(1);
+      expect(result.data[0].children[0].id).toBe("child-1");
+      expect(result.rawRows).toHaveLength(2);
     });
 
-    it("passes p_root_cluster_id param when rootId is provided", async () => {
+    it("passes p_root_cluster_id param and retrieves requested subtree root", async () => {
       const targetId = "target-root-uuid";
       mockRpcResult = {
         data: [
@@ -255,11 +289,21 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
       expect(result.error).toBeUndefined();
     });
 
-    it("guards against Supabase errors and returns descriptive failure", async () => {
+    it("guards against Supabase errors and returns descriptive failure without caching failure", async () => {
       mockRpcResult = {
         data: null,
-        error: { message: "AUTH_REQUIRED: Authentication required to view cluster lineage." },
+        error: { message: "Database timeout" },
       };
+
+      const result = await getClusterLineage();
+      expect(result.success).toBe(false);
+      expect(result.data).toEqual([]);
+      expect(result.error).toContain("Database timeout");
+    });
+
+    it("rejects unauthenticated requests before checking cache (Security Check)", async () => {
+      mockUser = null;
+      mockAuthError = { message: "Session expired" };
 
       const result = await getClusterLineage();
       expect(result.success).toBe(false);

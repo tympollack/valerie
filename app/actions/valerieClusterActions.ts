@@ -48,13 +48,18 @@ export interface ClusterLineageResult {
 
 /**
  * Normalizes a raw database record into a type-safe ClusterLineageNode.
+ * Resolves ties deterministically by cluster name ascending when active weights are equal.
  */
 export function sanitizeClusterNode(raw: any): ClusterLineageNode {
   const childrenRaw = Array.isArray(raw?.children) ? raw.children : [];
   const sanitizedChildren = childrenRaw.map(sanitizeClusterNode);
 
-  // Ensure children are ordered by active_weight DESC, then created_at / cluster_name ASC
-  sanitizedChildren.sort((a: ClusterLineageNode, b: ClusterLineageNode) => b.active_weight - a.active_weight);
+  sanitizedChildren.sort((a: ClusterLineageNode, b: ClusterLineageNode) => {
+    if (b.active_weight !== a.active_weight) {
+      return b.active_weight - a.active_weight;
+    }
+    return a.cluster_name.localeCompare(b.cluster_name);
+  });
 
   return {
     id: String(raw?.id ?? ""),
@@ -74,8 +79,8 @@ export function sanitizeClusterNode(raw: any): ClusterLineageNode {
 }
 
 /**
- * Reconstructs a complete recursive tree from a flat list of nodes if children
- * arrays were not already populated by the RPC.
+ * Reconstructs a complete recursive tree from flat or partially nested records,
+ * ensuring no descendant is lost and avoiding duplicate child insertions.
  */
 export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLineageNode[] {
   if (!nodes || nodes.length === 0) {
@@ -93,17 +98,27 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
     const current = nodeMap.get(originalNode.id)!;
     if (current.parent_cluster_id && nodeMap.has(current.parent_cluster_id)) {
       const parent = nodeMap.get(current.parent_cluster_id)!;
-      // Add child if not already present in parent's children array
       if (!parent.children.some((c) => c.id === current.id)) {
         parent.children.push(current);
-        parent.children.sort((a, b) => b.active_weight - a.active_weight);
       }
+      parent.children.sort((a, b) => {
+        if (b.active_weight !== a.active_weight) {
+          return b.active_weight - a.active_weight;
+        }
+        return a.cluster_name.localeCompare(b.cluster_name);
+      });
     } else {
       roots.push(current);
     }
   });
 
-  roots.sort((a, b) => b.active_weight - a.active_weight);
+  roots.sort((a, b) => {
+    if (b.active_weight !== a.active_weight) {
+      return b.active_weight - a.active_weight;
+    }
+    return a.cluster_name.localeCompare(b.cluster_name);
+  });
+
   return roots;
 }
 
@@ -114,93 +129,66 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
 async function fetchLineageFromDb(
   rootId?: string,
   authToken?: string | null
-): Promise<ClusterLineageResult> {
+): Promise<{ data: ClusterLineageNode[]; rawRows: ClusterLineageNode[] }> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    return {
-      success: false,
-      data: [],
-      error: "Supabase environment configuration is missing.",
-    };
+    throw new Error("Supabase environment configuration is missing.");
   }
 
-  let client: any;
-
-  if (authToken) {
-    client = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
-      global: {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
-      },
-    });
-  } else {
-    try {
-      client = await createServerClient();
-    } catch {
-      client = createSupabaseClient(supabaseUrl, supabaseAnonKey);
-    }
-  }
+  const client = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    },
+  });
 
   const rpcName = "get_cluster_lineage";
   const rpcParams = rootId ? { p_root_cluster_id: rootId } : {};
 
-  try {
-    const { data, error } = typeof client?.schema === "function"
-      ? await client.schema("valerie").rpc(rpcName, rpcParams)
-      : await client.rpc(rpcName, rpcParams);
+  const { data, error } = typeof (client as any).schema === "function"
+    ? await (client as any).schema("valerie").rpc(rpcName, rpcParams)
+    : await client.rpc(rpcName, rpcParams);
 
-    if (error) {
-      return {
-        success: false,
-        data: [],
-        error: error.message || "Failed to fetch cluster lineage from database.",
-      };
-    }
-
-    if (!data || !Array.isArray(data) || data.length === 0) {
-      return {
-        success: true,
-        data: [],
-        rawRows: [],
-      };
-    }
-
-    const sanitizedRows = data.map(sanitizeClusterNode);
-
-    // Filter to top-level roots for the hierarchical tree response
-    let treeRoots: ClusterLineageNode[];
-    if (rootId) {
-      treeRoots = sanitizedRows.filter((n) => n.id === rootId);
-      if (treeRoots.length === 0) {
-        treeRoots = sanitizedRows.filter((n) => n.depth === 0);
-      }
-    } else {
-      treeRoots = sanitizedRows.filter((n) => n.parent_cluster_id === null || n.depth === 0);
-    }
-
-    if (treeRoots.length === 0 && sanitizedRows.length > 0) {
-      treeRoots = buildNestedClusterTree(sanitizedRows);
-    }
-
-    return {
-      success: true,
-      data: treeRoots,
-      rawRows: sanitizedRows,
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      data: [],
-      error: err?.message || "Unexpected exception during cluster lineage retrieval.",
-    };
+  if (error) {
+    throw new Error(error.message || "Failed to fetch cluster lineage from database.");
   }
+
+  if (!data || !Array.isArray(data) || data.length === 0) {
+    return { data: [], rawRows: [] };
+  }
+
+  const sanitizedRows = data.map(sanitizeClusterNode);
+
+  // Assemble the complete tree from all flat/hierarchical rows before selecting target roots
+  const fullTree = buildNestedClusterTree(sanitizedRows);
+
+  let treeRoots: ClusterLineageNode[];
+  if (rootId) {
+    const findSubtree = (nodes: ClusterLineageNode[], target: string): ClusterLineageNode | null => {
+      for (const n of nodes) {
+        if (n.id === target) return n;
+        const found = findSubtree(n.children, target);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const matchedRoot = findSubtree(fullTree, rootId);
+    treeRoots = matchedRoot ? [matchedRoot] : fullTree;
+  } else {
+    treeRoots = fullTree;
+  }
+
+  return {
+    data: treeRoots,
+    rawRows: sanitizedRows,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // ISR Cached Lineage Fetcher (60s Revalidation)
+// Throws on database failure so transient errors are never cached.
 // ---------------------------------------------------------------------------
 
 const getCachedClusterLineageInternal = unstable_cache(
@@ -220,6 +208,7 @@ const getCachedClusterLineageInternal = unstable_cache(
 
 /**
  * Server Action: Fetches hierarchical topic cluster lineage trees.
+ * Performs caller session verification before reading cache to prevent expired bearer access.
  * Cached via ISR with 60s revalidation and tagged with "cluster-lineage".
  *
  * @param rootId Optional root cluster UUID to restrict subtree traversal.
@@ -227,14 +216,17 @@ const getCachedClusterLineageInternal = unstable_cache(
  */
 export async function getClusterLineage(rootId?: string): Promise<ClusterLineageResult> {
   let authToken: string | null = null;
+  let userId: string | null = null;
 
   try {
     const cookieStore = await cookies();
-    const ssoToken = extractSSOToken(cookieStore);
-    if (ssoToken) {
-      authToken = ssoToken;
-    } else {
-      const allCookies = cookieStore.getAll();
+    const allCookies = cookieStore.getAll();
+    const hasNativeSession = allCookies.some(
+      (c) => c.name.startsWith("sb-") && c.name.includes("-auth-token")
+    );
+
+    // 1. Prefer native Supabase session cookies over external SSO token
+    if (hasNativeSession) {
       const authCookie = allCookies.find(
         (c) => c.name.startsWith("sb-") && c.name.includes("-auth-token")
       );
@@ -242,15 +234,58 @@ export async function getClusterLineage(rootId?: string): Promise<ClusterLineage
         try {
           const parsed = JSON.parse(authCookie.value);
           authToken = parsed?.access_token || parsed?.[0] || authCookie.value;
+          if (parsed?.user?.id) userId = parsed.user.id;
         } catch {
           authToken = authCookie.value;
         }
+      }
+    } else {
+      // 2. Only supply SSO bearer when no native session exists
+      const ssoToken = extractSSOToken(cookieStore);
+      if (ssoToken) {
+        authToken = ssoToken;
       }
     }
   } catch {
     // In static rendering or test runner contexts, cookies() may not be available.
   }
 
-  const cacheKey = `${rootId || "global"}:${authToken ? "auth" : "anon"}`;
-  return getCachedClusterLineageInternal(cacheKey, rootId, authToken);
+  // 3. Authenticate caller on every request before serving cached lineage
+  try {
+    const serverClient = await createServerClient();
+    const { data: authData, error: authError } = await serverClient.auth.getUser();
+
+    if (authError || !authData?.user) {
+      return {
+        success: false,
+        data: [],
+        error: "AUTH_REQUIRED: Authentication required to view cluster lineage.",
+      };
+    }
+
+    userId = authData.user.id;
+  } catch (authException: any) {
+    return {
+      success: false,
+      data: [],
+      error: authException?.message || "AUTH_REQUIRED: Authentication required to view cluster lineage.",
+    };
+  }
+
+  const cacheKey = `${rootId || "global"}:${userId}`;
+
+  try {
+    const result = await getCachedClusterLineageInternal(cacheKey, rootId, authToken);
+    return {
+      success: true,
+      data: result.data,
+      rawRows: result.rawRows,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      data: [],
+      error: err?.message || "Failed to fetch cluster lineage from database.",
+    };
+  }
 }
