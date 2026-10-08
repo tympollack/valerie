@@ -43,6 +43,61 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
+// In-memory rate limiter for dynamic embedding-based few-shot retrieval to prevent DB flooding
+const EMBEDDING_RATE_LIMIT_WINDOW_MS = 60_000;
+const MAX_EMBEDDING_QUERIES_PER_WINDOW = 30;
+const embeddingRequestCounts = new Map<string, { count: number; resetAt: number }>();
+
+function isEmbeddingRetrievalAllowed(clientIdentifier: string): boolean {
+  const now = Date.now();
+
+  // Periodic pruning if cache size grows large
+  if (embeddingRequestCounts.size > 1000) {
+    for (const [key, record] of embeddingRequestCounts.entries()) {
+      if (now > record.resetAt) {
+        embeddingRequestCounts.delete(key);
+      }
+    }
+  }
+
+  const record = embeddingRequestCounts.get(clientIdentifier);
+  if (!record || now > record.resetAt) {
+    embeddingRequestCounts.set(clientIdentifier, { count: 1, resetAt: now + EMBEDDING_RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (record.count >= MAX_EMBEDDING_QUERIES_PER_WINDOW) {
+    return false;
+  }
+  record.count += 1;
+  return true;
+}
+
+function extractTrustedClientIp(req: NextRequest): string {
+  // 1. Vercel trusted edge IP header (immutable by clients)
+  const vercelIp = req.headers.get("x-vercel-ip");
+  if (vercelIp && vercelIp.trim().length > 0) {
+    return vercelIp.trim();
+  }
+
+  // 2. Direct upstream proxy client IP
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp && realIp.trim().length > 0) {
+    return realIp.trim();
+  }
+
+  // 3. X-Forwarded-For: In multi-proxy setups, the edge-appended trusted IP is the LAST element,
+  // whereas the first element can be trivially spoofed by client headers.
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const segments = forwarded.split(",").map((s) => s.trim()).filter(Boolean);
+    if (segments.length > 0) {
+      return segments[segments.length - 1];
+    }
+  }
+
+  return "anonymous";
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -104,21 +159,27 @@ export async function POST(req: NextRequest) {
       // Supabase connection or table not reachable; continue to AI / fallback
     }
 
-    // Dynamic Few-Shot RAG injection if embedding provided
+    // Dynamic Few-Shot RAG injection if embedding provided (throttled against DB query flooding)
     let fewShotDemonstrations = "";
     if (embedding && embedding.length > 0) {
-      try {
-        const { demonstrations } = await buildDynamicFewShotPrompt({
-          baseSystemPrompt: "",
-          embedding,
-          options: {
-            language: targetLanguage,
-            readingLevel: targetReadingLevel,
-          },
-        });
-        fewShotDemonstrations = demonstrations;
-      } catch (err) {
-        console.warn("[FewShotRAG] Semantic injection fallback:", err);
+      const clientIp = extractTrustedClientIp(req);
+
+      if (isEmbeddingRetrievalAllowed(clientIp)) {
+        try {
+          const { demonstrations } = await buildDynamicFewShotPrompt({
+            baseSystemPrompt: "",
+            embedding,
+            options: {
+              language: targetLanguage,
+              readingLevel: targetReadingLevel,
+            },
+          });
+          fewShotDemonstrations = demonstrations;
+        } catch (err) {
+          console.warn("[FewShotRAG] Semantic injection fallback:", err);
+        }
+      } else {
+        console.warn(`[FewShotRAG] Throttling high-frequency embedding query for IP: ${clientIp}`);
       }
     }
 

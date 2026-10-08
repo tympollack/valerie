@@ -112,10 +112,20 @@ export function generateCacheKey(
 
 const SHA256_REGEX = /^[a-f0-9]{64}$/i;
 
+const PROMPT_INJECTION_PATTERN =
+  /(\bignore\s+(all\s+)?(previous|prior)\s+instructions\b|\bdisregard\b|<\/?system>|\[INST\]|\[\/INST\]|<<SYS>>|<\|im_start\|>|<\|im_end\|>|\bdeveloper\s+mode\b)/i;
+
 function isValidDemonstrationTerm(term?: string | null): term is string {
   if (!term || typeof term !== "string") return false;
   const clean = term.trim();
-  return clean.length > 0 && !SHA256_REGEX.test(clean);
+  return clean.length > 0 && !SHA256_REGEX.test(clean) && !PROMPT_INJECTION_PATTERN.test(clean);
+}
+
+function isValidDemonstrationDefinition(def?: string | null): def is string {
+  if (!def || typeof def !== "string") return false;
+  const clean = def.trim();
+  if (clean.length === 0 || clean.length > 500) return false;
+  return !PROMPT_INJECTION_PATTERN.test(clean);
 }
 
 /**
@@ -164,7 +174,7 @@ export async function fetchTopSemanticExamples(
         const validRows = data.filter(
           (row: any) =>
             isValidDemonstrationTerm(row.original_text) &&
-            Boolean(row.cached_translation)
+            isValidDemonstrationDefinition(row.cached_translation)
         );
 
         if (validRows.length > 0) {
@@ -209,7 +219,7 @@ export async function fetchTopSemanticExamples(
         const validRows = data.filter(
           (row: any) =>
             isValidDemonstrationTerm(row.original_text) &&
-            Boolean(row.cached_translation)
+            isValidDemonstrationDefinition(row.cached_translation)
         );
 
         if (validRows.length > 0) {
@@ -245,9 +255,11 @@ export function formatFewShotDemonstrations(examples: FewShotExample[]): string 
     return "";
   }
 
-  const lines = examples.map(
-    (ex) => `Input: ${ex.term} -> Simplified: ${ex.definition}`
-  );
+  const lines = examples.map((ex) => {
+    const cleanTerm = ex.term.replace(/[\r\n]+/g, " ").replace(/[<>{}[\]]/g, "").trim();
+    const cleanDef = ex.definition.replace(/[\r\n]+/g, " ").replace(/[<>{}[\]]/g, "").trim();
+    return `Input: ${cleanTerm} -> Simplified: ${cleanDef}`;
+  });
 
   return [
     "### In-Context Few-Shot Demonstrations",

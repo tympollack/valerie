@@ -32,7 +32,7 @@ export function formatLoraJsonl(
   pairs: Array<{ prompt_input: string; completion_output: string; task_type: string }>,
   limit?: number
 ): string {
-  const slice = limit && limit > 0 ? pairs.slice(0, limit) : pairs;
+  const slice = limit === undefined ? pairs : pairs.slice(0, Math.max(0, limit));
   return slice
     .map((p) =>
       JSON.stringify({
@@ -48,8 +48,15 @@ export function formatLoraJsonl(
     .join("\n");
 }
 
+const VALID_TASK_TYPES: Set<string> = new Set([
+  "TOOLTIP_SIMPLIFY",
+  "SENTIMENT_CLASSIFY",
+  "CLUSTER_NAMING",
+]);
+
 /**
  * Parses and validates newline-delimited JSONL formatted LoRA dataset records.
+ * Strictly verifies known task types, user/assistant roles, and non-empty content.
  */
 export function parseLoraDatasetJsonl(jsonl: string): LoRAPair[] {
   if (!jsonl || jsonl.trim().length === 0) {
@@ -64,9 +71,19 @@ export function parseLoraDatasetJsonl(jsonl: string): LoRAPair[] {
       const parsed = JSON.parse(line);
       if (
         typeof parsed.prompt === "string" &&
+        parsed.prompt.trim().length > 0 &&
         typeof parsed.completion === "string" &&
+        parsed.completion.trim().length > 0 &&
         typeof parsed.task_type === "string" &&
-        Array.isArray(parsed.messages)
+        VALID_TASK_TYPES.has(parsed.task_type) &&
+        Array.isArray(parsed.messages) &&
+        parsed.messages.length === 2 &&
+        parsed.messages[0]?.role === "user" &&
+        typeof parsed.messages[0]?.content === "string" &&
+        parsed.messages[0].content.trim().length > 0 &&
+        parsed.messages[1]?.role === "assistant" &&
+        typeof parsed.messages[1]?.content === "string" &&
+        parsed.messages[1].content.trim().length > 0
       ) {
         results.push(parsed as LoRAPair);
       }

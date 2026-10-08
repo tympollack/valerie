@@ -426,12 +426,7 @@ export async function verifySSOToken(
     if (!payload.iss) {
       return { valid: false, error: `Missing required issuer claim (expected ${options.expectedIssuer}).` };
     }
-    const validIss =
-      payload.iss === options.expectedIssuer ||
-      payload.iss.includes("sunshade.icu") ||
-      payload.iss === "supabase";
-
-    if (!validIss) {
+    if (payload.iss !== options.expectedIssuer) {
       return { valid: false, error: `Invalid issuer: expected ${options.expectedIssuer}` };
     }
   }
