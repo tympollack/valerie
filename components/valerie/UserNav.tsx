@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition, useEffect } from "react"
+import { useState, useTransition, useEffect, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -50,10 +50,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
 
   const [returnToUrl, setReturnToUrl] = useState("")
 
+  const prevUserIdRef = useRef<string | null>(initialUserContext?.userId || null)
+
   // Sync state if server-provided initialUserContext changes (e.g. after router.refresh)
   useEffect(() => {
     if (initialUserContext) {
       setUserContext(initialUserContext)
+      prevUserIdRef.current = initialUserContext.userId
     }
   }, [initialUserContext])
 
@@ -77,6 +80,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
         // verified via wildcard .sunshade.icu SSO cookies. Overwriting context on
         // initial null session falsely signs SSO users out.
         if (event === "SIGNED_OUT") {
+          prevUserIdRef.current = null
           setUserContext({
             authenticated: false,
             userId: null,
@@ -96,24 +100,26 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             (session.user.user_metadata?.display_name as string) ||
             (email ? email.split("@")[0] : null)
 
-          setUserContext((prev) => {
-            const isDifferentUser = prev.userId && prev.userId !== session.user.id
-            if (isDifferentUser) {
-              router.refresh()
-            }
-            return {
-              authenticated: true,
-              userId: session.user.id,
-              email,
-              displayName,
-              isHumanVerified,
-              verificationTier: freshProof.verificationTier,
-              trustState: freshProof.trustState,
-              nullifierHash: freshProof.nullifierHash,
-              provider: freshProof.provider,
-              score: freshProof.score,
-            }
+          const isDifferentUser =
+            Boolean(prevUserIdRef.current) && prevUserIdRef.current !== session.user.id
+          prevUserIdRef.current = session.user.id
+
+          setUserContext({
+            authenticated: true,
+            userId: session.user.id,
+            email,
+            displayName,
+            isHumanVerified,
+            verificationTier: freshProof.verificationTier,
+            trustState: freshProof.trustState,
+            nullifierHash: freshProof.nullifierHash,
+            provider: freshProof.provider,
+            score: freshProof.score,
           })
+
+          if (isDifferentUser) {
+            router.refresh()
+          }
         }
       })
 

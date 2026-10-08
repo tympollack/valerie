@@ -80,7 +80,7 @@ export function sanitizeClusterNode(raw: any): ClusterLineageNode {
 
 /**
  * Reconstructs a complete recursive tree from flat or partially nested records,
- * ensuring no descendant is lost and avoiding duplicate child insertions.
+ * canonicalizing every node by ID so descendants are never lost and no duplicate children exist.
  */
 export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLineageNode[] {
   if (!nodes || nodes.length === 0) {
@@ -88,27 +88,66 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
   }
 
   const nodeMap = new Map<string, ClusterLineageNode>();
-  nodes.forEach((node) => {
-    nodeMap.set(node.id, { ...node, children: [...(node.children || [])] });
-  });
 
-  const roots: ClusterLineageNode[] = [];
-
-  nodes.forEach((originalNode) => {
-    const current = nodeMap.get(originalNode.id)!;
-    if (current.parent_cluster_id && nodeMap.has(current.parent_cluster_id)) {
-      const parent = nodeMap.get(current.parent_cluster_id)!;
-      if (!parent.children.some((c) => c.id === current.id)) {
-        parent.children.push(current);
-      }
-      parent.children.sort((a, b) => {
-        if (b.active_weight !== a.active_weight) {
-          return b.active_weight - a.active_weight;
-        }
-        return a.cluster_name.localeCompare(b.cluster_name);
+  // 1. Register canonical instances for all nodes (both flat top-level rows and embedded children)
+  const registerCanonicalNode = (node: ClusterLineageNode) => {
+    if (!nodeMap.has(node.id)) {
+      nodeMap.set(node.id, {
+        ...node,
+        children: [],
       });
     } else {
-      roots.push(current);
+      const existing = nodeMap.get(node.id)!;
+      if (!existing.parent_cluster_id && node.parent_cluster_id) {
+        existing.parent_cluster_id = node.parent_cluster_id;
+      }
+    }
+
+    if (Array.isArray(node.children)) {
+      node.children.forEach(registerCanonicalNode);
+    }
+  };
+
+  nodes.forEach(registerCanonicalNode);
+
+  // 2. Link parent-child relationships using canonical object references exclusively
+  const linkChildren = (node: ClusterLineageNode) => {
+    const canonicalCurrent = nodeMap.get(node.id)!;
+
+    if (canonicalCurrent.parent_cluster_id && nodeMap.has(canonicalCurrent.parent_cluster_id)) {
+      const canonicalParent = nodeMap.get(canonicalCurrent.parent_cluster_id)!;
+      if (!canonicalParent.children.some((c) => c.id === canonicalCurrent.id)) {
+        canonicalParent.children.push(canonicalCurrent);
+      }
+    }
+
+    if (Array.isArray(node.children)) {
+      node.children.forEach((child) => {
+        const canonicalChild = nodeMap.get(child.id);
+        if (canonicalChild && !canonicalCurrent.children.some((c) => c.id === canonicalChild.id)) {
+          canonicalCurrent.children.push(canonicalChild);
+        }
+      });
+    }
+  };
+
+  nodes.forEach(linkChildren);
+
+  // 3. Sort children deterministically across all canonical nodes
+  nodeMap.forEach((node) => {
+    node.children.sort((a, b) => {
+      if (b.active_weight !== a.active_weight) {
+        return b.active_weight - a.active_weight;
+      }
+      return a.cluster_name.localeCompare(b.cluster_name);
+    });
+  });
+
+  // 4. Collect top-level roots
+  const roots: ClusterLineageNode[] = [];
+  nodeMap.forEach((node) => {
+    if (!node.parent_cluster_id || !nodeMap.has(node.parent_cluster_id)) {
+      roots.push(node);
     }
   });
 
@@ -189,11 +228,16 @@ async function fetchLineageFromDb(
 // ---------------------------------------------------------------------------
 // ISR Cached Lineage Fetcher (60s Revalidation)
 // Throws on database failure so transient errors are never cached.
+// Ephemeral token store decouples raw JWT from cache arguments so token rotation
+// never invalidates valid cached lineage data.
 // ---------------------------------------------------------------------------
 
+const activeUserAuthTokens = new Map<string, string>();
+
 const getCachedClusterLineageInternal = unstable_cache(
-  async (cacheKey: string, rootId?: string, authToken?: string | null) => {
-    return fetchLineageFromDb(rootId, authToken);
+  async (targetRootId: string, targetUserId: string) => {
+    const token = activeUserAuthTokens.get(targetUserId) || null;
+    return fetchLineageFromDb(targetRootId === "global" ? undefined : targetRootId, token);
   },
   ["valerie-cluster-lineage"],
   {
@@ -272,10 +316,13 @@ export async function getClusterLineage(rootId?: string): Promise<ClusterLineage
     };
   }
 
-  const cacheKey = `${rootId || "global"}:${userId}`;
+  const stableRootId = rootId || "global";
+  if (authToken) {
+    activeUserAuthTokens.set(userId, authToken);
+  }
 
   try {
-    const result = await getCachedClusterLineageInternal(cacheKey, rootId, authToken);
+    const result = await getCachedClusterLineageInternal(stableRootId, userId);
     return {
       success: true,
       data: result.data,
@@ -287,5 +334,7 @@ export async function getClusterLineage(rootId?: string): Promise<ClusterLineage
       data: [],
       error: err?.message || "Failed to fetch cluster lineage from database.",
     };
+  } finally {
+    activeUserAuthTokens.delete(userId);
   }
 }

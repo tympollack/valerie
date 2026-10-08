@@ -43,6 +43,25 @@ async function sha256Hex(input: string): Promise<string> {
     .join("");
 }
 
+// In-memory rate limiter for dynamic embedding-based few-shot retrieval to prevent DB flooding
+const EMBEDDING_RATE_LIMIT_WINDOW_MS = 60_000;
+const MAX_EMBEDDING_QUERIES_PER_WINDOW = 30;
+const embeddingRequestCounts = new Map<string, { count: number; resetAt: number }>();
+
+function isEmbeddingRetrievalAllowed(clientIp: string): boolean {
+  const now = Date.now();
+  const record = embeddingRequestCounts.get(clientIp);
+  if (!record || now > record.resetAt) {
+    embeddingRequestCounts.set(clientIp, { count: 1, resetAt: now + EMBEDDING_RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  if (record.count >= MAX_EMBEDDING_QUERIES_PER_WINDOW) {
+    return false;
+  }
+  record.count += 1;
+  return true;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -104,21 +123,30 @@ export async function POST(req: NextRequest) {
       // Supabase connection or table not reachable; continue to AI / fallback
     }
 
-    // Dynamic Few-Shot RAG injection if embedding provided
+    // Dynamic Few-Shot RAG injection if embedding provided (throttled against DB query flooding)
     let fewShotDemonstrations = "";
     if (embedding && embedding.length > 0) {
-      try {
-        const { demonstrations } = await buildDynamicFewShotPrompt({
-          baseSystemPrompt: "",
-          embedding,
-          options: {
-            language: targetLanguage,
-            readingLevel: targetReadingLevel,
-          },
-        });
-        fewShotDemonstrations = demonstrations;
-      } catch (err) {
-        console.warn("[FewShotRAG] Semantic injection fallback:", err);
+      const clientIp =
+        req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        req.headers.get("x-real-ip") ||
+        "anonymous";
+
+      if (isEmbeddingRetrievalAllowed(clientIp)) {
+        try {
+          const { demonstrations } = await buildDynamicFewShotPrompt({
+            baseSystemPrompt: "",
+            embedding,
+            options: {
+              language: targetLanguage,
+              readingLevel: targetReadingLevel,
+            },
+          });
+          fewShotDemonstrations = demonstrations;
+        } catch (err) {
+          console.warn("[FewShotRAG] Semantic injection fallback:", err);
+        }
+      } else {
+        console.warn(`[FewShotRAG] Throttling high-frequency embedding query for IP: ${clientIp}`);
       }
     }
 
