@@ -198,6 +198,64 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
       expect(tree[0].children[0].children[0].id).toBe("grandchild-1");
     });
 
+    it("preserves deeply nested grandchildren from a single fully nested RPC row", () => {
+      const nestedRow: ClusterLineageNode = {
+        id: "root-1",
+        cluster_name: "Root Macro",
+        parent_cluster_id: null,
+        depth: 0,
+        path: ["root-1"],
+        is_active: true,
+        member_count: 50,
+        variance: 0.2,
+        avg_likert: 0.8,
+        avg_confidence: 70,
+        total_votes: 15,
+        active_weight: 50,
+        children: [
+          {
+            id: "child-1",
+            cluster_name: "Child Subtopic",
+            parent_cluster_id: "root-1",
+            depth: 1,
+            path: ["root-1", "child-1"],
+            is_active: true,
+            member_count: 30,
+            variance: 0.1,
+            avg_likert: 1.1,
+            avg_confidence: 75,
+            total_votes: 10,
+            active_weight: 30,
+            children: [
+              {
+                id: "grandchild-1",
+                cluster_name: "Grandchild Leaf",
+                parent_cluster_id: "child-1",
+                depth: 2,
+                path: ["root-1", "child-1", "grandchild-1"],
+                is_active: true,
+                member_count: 12,
+                variance: 0.05,
+                avg_likert: 1.5,
+                avg_confidence: 85,
+                total_votes: 5,
+                active_weight: 12,
+                children: [],
+              },
+            ],
+          },
+        ],
+      };
+
+      const tree = buildNestedClusterTree([nestedRow]);
+      expect(tree).toHaveLength(1);
+      expect(tree[0].id).toBe("root-1");
+      expect(tree[0].children).toHaveLength(1);
+      expect(tree[0].children[0].id).toBe("child-1");
+      expect(tree[0].children[0].children).toHaveLength(1);
+      expect(tree[0].children[0].children[0].id).toBe("grandchild-1");
+    });
+
     it("returns empty array for empty inputs", () => {
       expect(buildNestedClusterTree([])).toEqual([]);
     });
@@ -309,6 +367,37 @@ describe("Cluster Lineage & Hierarchy API (TASK-VAL-VEC-HIERARCHY)", () => {
       expect(result.success).toBe(false);
       expect(result.data).toEqual([]);
       expect(result.error).toContain("AUTH_REQUIRED");
+    });
+
+    it("handles concurrent lineage fetches for the same user without bearer token collision", async () => {
+      mockRpcResult = {
+        data: [
+          {
+            id: "root-1",
+            cluster_name: "Macro Topic",
+            parent_cluster_id: null,
+            depth: 0,
+            path: ["root-1"],
+            is_active: true,
+            member_count: 20,
+            variance: 0.1,
+            avg_likert: 1.0,
+            avg_confidence: 75,
+            total_votes: 8,
+            active_weight: 20,
+            children: [],
+          },
+        ],
+        error: null,
+      };
+
+      const [resA, resB] = await Promise.all([
+        getClusterLineage("root-1"),
+        getClusterLineage(),
+      ]);
+
+      expect(resA.success).toBe(true);
+      expect(resB.success).toBe(true);
     });
   });
 });

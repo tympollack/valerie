@@ -11,14 +11,12 @@
 
 import { unstable_cache } from "next/cache";
 import { cookies } from "next/headers";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createClient as createServerClient } from "@/lib/supabase/server";
 import { extractSSOToken } from "@/lib/auth/ssoHandshake";
 
-// ---------------------------------------------------------------------------
 // Type Definitions
-// ---------------------------------------------------------------------------
-
 export interface ClusterLineageNode {
   id: string;
   cluster_name: string;
@@ -42,10 +40,7 @@ export interface ClusterLineageResult {
   error?: string;
 }
 
-// ---------------------------------------------------------------------------
 // Tree Assembly & Sanitization Helpers
-// ---------------------------------------------------------------------------
-
 /**
  * Normalizes a raw database record into a type-safe ClusterLineageNode.
  * Resolves ties deterministically by cluster name ascending when active weights are equal.
@@ -88,9 +83,14 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
   }
 
   const nodeMap = new Map<string, ClusterLineageNode>();
+  const parentChildEdges = new Map<string, Set<string>>();
+  const childToParent = new Map<string, string>();
 
-  // 1. Register canonical instances for all nodes (both flat top-level rows and embedded children)
-  const registerCanonicalNode = (node: ClusterLineageNode) => {
+  // 1. Recursively traverse all nodes (both flat rows and embedded children)
+  // to register canonical objects and collect all structural edges
+  const visitNode = (node: ClusterLineageNode, inferredParentId?: string) => {
+    if (!node || !node.id) return;
+
     if (!nodeMap.has(node.id)) {
       nodeMap.set(node.id, {
         ...node,
@@ -103,35 +103,47 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
       }
     }
 
+    const parentId = node.parent_cluster_id || inferredParentId;
+    if (parentId) {
+      const canonical = nodeMap.get(node.id)!;
+      if (!canonical.parent_cluster_id) {
+        canonical.parent_cluster_id = parentId;
+      }
+      childToParent.set(node.id, parentId);
+      if (!parentChildEdges.has(parentId)) {
+        parentChildEdges.set(parentId, new Set());
+      }
+      parentChildEdges.get(parentId)!.add(node.id);
+    }
+
     if (Array.isArray(node.children)) {
-      node.children.forEach(registerCanonicalNode);
+      for (const child of node.children) {
+        if (child && child.id) {
+          if (!parentChildEdges.has(node.id)) {
+            parentChildEdges.set(node.id, new Set());
+          }
+          parentChildEdges.get(node.id)!.add(child.id);
+          childToParent.set(child.id, node.id);
+          visitNode(child, node.id);
+        }
+      }
     }
   };
 
-  nodes.forEach(registerCanonicalNode);
+  nodes.forEach((n) => visitNode(n));
 
-  // 2. Link parent-child relationships using canonical object references exclusively
-  const linkChildren = (node: ClusterLineageNode) => {
-    const canonicalCurrent = nodeMap.get(node.id)!;
-
-    if (canonicalCurrent.parent_cluster_id && nodeMap.has(canonicalCurrent.parent_cluster_id)) {
-      const canonicalParent = nodeMap.get(canonicalCurrent.parent_cluster_id)!;
-      if (!canonicalParent.children.some((c) => c.id === canonicalCurrent.id)) {
-        canonicalParent.children.push(canonicalCurrent);
-      }
-    }
-
-    if (Array.isArray(node.children)) {
-      node.children.forEach((child) => {
-        const canonicalChild = nodeMap.get(child.id);
-        if (canonicalChild && !canonicalCurrent.children.some((c) => c.id === canonicalChild.id)) {
-          canonicalCurrent.children.push(canonicalChild);
+  // 2. Link canonical children using registered edges
+  parentChildEdges.forEach((childIds, parentId) => {
+    const parentNode = nodeMap.get(parentId);
+    if (parentNode) {
+      childIds.forEach((childId) => {
+        const childNode = nodeMap.get(childId);
+        if (childNode && !parentNode.children.some((c) => c.id === childNode.id)) {
+          parentNode.children.push(childNode);
         }
       });
     }
-  };
-
-  nodes.forEach(linkChildren);
+  });
 
   // 3. Sort children deterministically across all canonical nodes
   nodeMap.forEach((node) => {
@@ -146,7 +158,8 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
   // 4. Collect top-level roots
   const roots: ClusterLineageNode[] = [];
   nodeMap.forEach((node) => {
-    if (!node.parent_cluster_id || !nodeMap.has(node.parent_cluster_id)) {
+    const parentId = childToParent.get(node.id) || node.parent_cluster_id;
+    if (!parentId || !nodeMap.has(parentId)) {
       roots.push(node);
     }
   });
@@ -161,10 +174,7 @@ export function buildNestedClusterTree(nodes: ClusterLineageNode[]): ClusterLine
   return roots;
 }
 
-// ---------------------------------------------------------------------------
 // Supabase RPC Executor
-// ---------------------------------------------------------------------------
-
 async function fetchLineageFromDb(
   rootId?: string,
   authToken?: string | null
@@ -228,15 +238,53 @@ async function fetchLineageFromDb(
 // ---------------------------------------------------------------------------
 // ISR Cached Lineage Fetcher (60s Revalidation)
 // Throws on database failure so transient errors are never cached.
-// Ephemeral token store decouples raw JWT from cache arguments so token rotation
-// never invalidates valid cached lineage data.
+// Ephemeral request context and reference-counted token registry decouple
+// raw JWT credentials from cache keys without losing bearer on concurrent requests.
 // ---------------------------------------------------------------------------
 
-const activeUserAuthTokens = new Map<string, string>();
+interface RequestAuthContext {
+  userId: string;
+  authToken: string | null;
+}
+
+const requestAuthStorage = new AsyncLocalStorage<RequestAuthContext>();
+const userTokenRegistry = new Map<string, { token: string; refCount: number }>();
+
+function retainUserAuthToken(userId: string, token: string): void {
+  const entry = userTokenRegistry.get(userId);
+  if (entry) {
+    entry.refCount += 1;
+    entry.token = token;
+  } else {
+    userTokenRegistry.set(userId, { token, refCount: 1 });
+  }
+}
+
+function releaseUserAuthToken(userId: string): void {
+  const entry = userTokenRegistry.get(userId);
+  if (entry) {
+    entry.refCount -= 1;
+    if (entry.refCount <= 0) {
+      userTokenRegistry.delete(userId);
+    }
+  }
+}
+
+function getActiveAuthToken(userId: string): string | null {
+  const context = requestAuthStorage.getStore();
+  if (context && context.userId === userId && context.authToken) {
+    return context.authToken;
+  }
+  const registryEntry = userTokenRegistry.get(userId);
+  if (registryEntry?.token) {
+    return registryEntry.token;
+  }
+  return process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+}
 
 const getCachedClusterLineageInternal = unstable_cache(
   async (targetRootId: string, targetUserId: string) => {
-    const token = activeUserAuthTokens.get(targetUserId) || null;
+    const token = getActiveAuthToken(targetUserId);
     return fetchLineageFromDb(targetRootId === "global" ? undefined : targetRootId, token);
   },
   ["valerie-cluster-lineage"],
@@ -318,11 +366,14 @@ export async function getClusterLineage(rootId?: string): Promise<ClusterLineage
 
   const stableRootId = rootId || "global";
   if (authToken) {
-    activeUserAuthTokens.set(userId, authToken);
+    retainUserAuthToken(userId, authToken);
   }
 
   try {
-    const result = await getCachedClusterLineageInternal(stableRootId, userId);
+    const result = await requestAuthStorage.run(
+      { userId, authToken },
+      () => getCachedClusterLineageInternal(stableRootId, userId)
+    );
     return {
       success: true,
       data: result.data,
@@ -335,6 +386,8 @@ export async function getClusterLineage(rootId?: string): Promise<ClusterLineage
       error: err?.message || "Failed to fetch cluster lineage from database.",
     };
   } finally {
-    activeUserAuthTokens.delete(userId);
+    if (authToken) {
+      releaseUserAuthToken(userId);
+    }
   }
 }

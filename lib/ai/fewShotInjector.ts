@@ -219,7 +219,7 @@ export async function fetchTopSemanticExamples(
         const validRows = data.filter(
           (row: any) =>
             isValidDemonstrationTerm(row.original_text) &&
-            Boolean(row.cached_translation)
+            isValidDemonstrationDefinition(row.cached_translation)
         );
 
         if (validRows.length > 0) {
