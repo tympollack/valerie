@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition, useEffect } from "react"
+import { useState, useTransition, useEffect, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -24,6 +24,7 @@ import {
 } from "lucide-react"
 import { type UserContext, signOutAction } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/client"
+import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
 
 interface UserNavProps {
@@ -49,10 +50,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
 
   const [returnToUrl, setReturnToUrl] = useState("")
 
+  const prevUserIdRef = useRef<string | null>(initialUserContext?.userId || null)
+
   // Sync state if server-provided initialUserContext changes (e.g. after router.refresh)
   useEffect(() => {
     if (initialUserContext) {
       setUserContext(initialUserContext)
+      prevUserIdRef.current = initialUserContext.userId
     }
   }, [initialUserContext])
 
@@ -69,8 +73,14 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       const supabase = createClient()
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (!session?.user) {
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
+        // Only clear user context on explicit SIGNED_OUT event.
+        // For SSO-only visitors, the client-side Supabase instance initially receives
+        // a null browser session (INITIAL_SESSION) while server-side context is already
+        // verified via wildcard .sunshade.icu SSO cookies. Overwriting context on
+        // initial null session falsely signs SSO users out.
+        if (event === "SIGNED_OUT") {
+          prevUserIdRef.current = null
           setUserContext({
             authenticated: false,
             userId: null,
@@ -80,6 +90,36 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             verificationTier: "UNVERIFIED",
             trustState: "active",
           })
+        } else if (session?.user) {
+          const freshProof = extractAntiSybilProof(session.user)
+          const isHumanVerified = freshProof.isHuman && freshProof.trustState === "active"
+          const email = session.user.email || null
+          const displayName =
+            (session.user.user_metadata?.full_name as string) ||
+            (session.user.user_metadata?.name as string) ||
+            (session.user.user_metadata?.display_name as string) ||
+            (email ? email.split("@")[0] : null)
+
+          const isDifferentUser =
+            Boolean(prevUserIdRef.current) && prevUserIdRef.current !== session.user.id
+          prevUserIdRef.current = session.user.id
+
+          setUserContext({
+            authenticated: true,
+            userId: session.user.id,
+            email,
+            displayName,
+            isHumanVerified,
+            verificationTier: freshProof.verificationTier,
+            trustState: freshProof.trustState,
+            nullifierHash: freshProof.nullifierHash,
+            provider: freshProof.provider,
+            score: freshProof.score,
+          })
+
+          if (isDifferentUser) {
+            router.refresh()
+          }
         }
       })
 
@@ -119,18 +159,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
     window.location.hostname.endsWith(".sunshade.icu")
       ? "https://hub.sunshade.icu"
       : "https://hub.sunshade.icu"
-  const authBaseUrl =
-    typeof window !== "undefined" &&
-    window.location.hostname.endsWith(".sunshade.icu")
-      ? "https://auth.sunshade.icu"
-      : "https://auth.sunshade.icu"
 
   const loginUrl = returnToUrl
-    ? `${authBaseUrl}/login?return_to=${encodeURIComponent(returnToUrl)}`
-    : `${authBaseUrl}/login`
+    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}`
+    : `${hubBaseUrl}/login`
   const verifyUrl = returnToUrl
-    ? `${authBaseUrl}/verify?return_to=${encodeURIComponent(returnToUrl)}`
-    : `${authBaseUrl}/verify`
+    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}&verify=true`
+    : `${hubBaseUrl}/dashboard`
 
   // 1. Unauthenticated State
   if (!userContext.authenticated) {

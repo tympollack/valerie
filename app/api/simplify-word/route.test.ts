@@ -48,4 +48,29 @@ describe("API: /api/simplify-word", () => {
     expect(data.hashKey).toBeDefined();
     expect(data.hashKey.length).toBe(64);
   });
+
+  it("extracts trusted edge IP and handles embedding query rate limiting", async () => {
+    const dummyEmbedding = Array.from({ length: 1536 }, () => 0.01);
+    const makeReq = () =>
+      new NextRequest("http://localhost:3000/api/simplify-word", {
+        method: "POST",
+        headers: {
+          "x-forwarded-for": "1.2.3.4, 203.0.113.50",
+          "x-vercel-ip": "203.0.113.50",
+        },
+        body: JSON.stringify({
+          word: "transit line",
+          embedding: dummyEmbedding,
+        }),
+      });
+
+    const results = await Promise.all(
+      Array.from({ length: 32 }, () => POST(makeReq()))
+    );
+
+    for (const res of results) {
+      expect(res.status).toBe(200);
+    }
+  });
 });
+

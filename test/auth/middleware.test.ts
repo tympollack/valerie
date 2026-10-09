@@ -30,6 +30,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
     exp: nowSec + 3600,
     nbf: nowSec - 60,
     iss: "https://hub.sunshade.icu",
+    aud: "authenticated",
     app_metadata: {
       is_human: true,
       anti_sybil_verified: true,
@@ -43,6 +44,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
     exp: nowSec + 3600,
     nbf: nowSec - 60,
     iss: "https://hub.sunshade.icu",
+    aud: "authenticated",
     app_metadata: {
       is_human: false,
       anti_sybil_verified: false,
@@ -56,6 +58,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
     exp: nowSec + 3600,
     nbf: nowSec - 60,
     iss: "https://hub.sunshade.icu",
+    aud: "authenticated",
     app_metadata: {
       is_human: true,
       anti_sybil_verified: true,
@@ -123,7 +126,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       expect(json.error).toMatch(/authentication required/i);
     });
 
-    it("redirects unauthenticated browser navigation on voting routes to auth.sunshade.icu/login", async () => {
+    it("redirects unauthenticated browser navigation on voting routes to hub.sunshade.icu/login", async () => {
       const targetUrl = "https://valerie.sunshade.icu/vote";
       const req = new NextRequest(targetUrl, {
         method: "GET",
@@ -132,8 +135,8 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       const res = await updateSession(req);
       expect(res.status).toBe(307); // NextResponse.redirect default
       const location = res.headers.get("location");
-      expect(location).toContain("auth.sunshade.icu/login");
-      expect(location).toContain(encodeURIComponent(targetUrl));
+      expect(location).toContain("hub.sunshade.icu/login");
+      expect(location).toContain(`redirect=${encodeURIComponent(targetUrl)}`);
     });
 
     it("rejects unverified bot accounts attempting to vote with 403 for API / Action requests", async () => {
@@ -151,7 +154,7 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       expect(json.error).toMatch(/single-human anti-sybil verification required/i);
     });
 
-    it("redirects unverified accounts on browser navigation to auth.sunshade.icu/verify", async () => {
+    it("redirects unverified accounts on browser navigation to hub.sunshade.icu/login?redirect=...&verify=true", async () => {
       const targetUrl = "https://valerie.sunshade.icu/vote";
       const req = new NextRequest(targetUrl, {
         method: "GET",
@@ -163,8 +166,9 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       const res = await updateSession(req);
       expect(res.status).toBe(307);
       const location = res.headers.get("location");
-      expect(location).toContain("auth.sunshade.icu/verify");
-      expect(location).toContain(encodeURIComponent(targetUrl));
+      expect(location).toContain("hub.sunshade.icu/login");
+      expect(location).toContain(`redirect=${encodeURIComponent(targetUrl)}`);
+      expect(location).toContain("verify=true");
     });
 
     it("rejects slashed accounts even if tier is anchor", async () => {
@@ -187,6 +191,74 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
 
       const res = await updateSession(req);
       expect(res.status).toBe(200);
+    });
+
+    it("strips client-supplied spoofed headers on unauthenticated requests", async () => {
+      const req = new NextRequest("https://valerie.sunshade.icu/", {
+        headers: {
+          "x-user-id": "attacker-spoofed-id",
+          "x-is-human-verified": "true",
+        },
+      });
+
+      const res = await updateSession(req);
+      expect(res.status).toBe(200);
+      expect(req.headers.get("x-user-id")).toBeNull();
+      expect(req.headers.get("x-is-human-verified")).toBeNull();
+    });
+
+    it("rejects tokens with untrusted issuer during SSO fallback", async () => {
+      const untrustedIssuerJWT = createMockJWT({
+        sub: "user-attacker-123",
+        exp: nowSec + 3600,
+        nbf: nowSec - 60,
+        iss: "https://evil-phishing.com",
+        aud: "authenticated",
+        app_metadata: {
+          is_human: true,
+          anti_sybil_verified: true,
+          verification_tier: "ANCHOR",
+          trust_state: "active",
+        },
+      });
+
+      const req = new NextRequest("https://valerie.sunshade.icu/vote", {
+        method: "POST",
+        headers: {
+          cookie: `sunshade_sso=${untrustedIssuerJWT}`,
+          "next-action": "action_submit_vote",
+        },
+      });
+
+      const res = await updateSession(req);
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects tokens with untrusted audience during SSO fallback", async () => {
+      const untrustedAudienceJWT = createMockJWT({
+        sub: "user-attacker-456",
+        exp: nowSec + 3600,
+        nbf: nowSec - 60,
+        iss: "https://hub.sunshade.icu",
+        aud: "malicious-third-party-app",
+        app_metadata: {
+          is_human: true,
+          anti_sybil_verified: true,
+          verification_tier: "ANCHOR",
+          trust_state: "active",
+        },
+      });
+
+      const req = new NextRequest("https://valerie.sunshade.icu/vote", {
+        method: "POST",
+        headers: {
+          cookie: `sunshade_sso=${untrustedAudienceJWT}`,
+          "next-action": "action_submit_vote",
+        },
+      });
+
+      const res = await updateSession(req);
+      expect(res.status).toBe(401);
     });
   });
 });

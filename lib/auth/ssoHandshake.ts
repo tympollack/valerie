@@ -172,20 +172,30 @@ export function extractSSOToken(input: unknown): string | null {
   }
 
   // 3. Cookies map / Cookies store / NextRequest cookies
-  if (record.cookies && typeof record.cookies === "object") {
-    const cookies = record.cookies as {
-      get?: (name: string) => { value?: string } | undefined;
-      getAll?: () => Array<{ name: string; value: string }>;
-    };
-    if (typeof cookies.get === "function") {
+  const cookiesObj =
+    record.cookies && typeof record.cookies === "object"
+      ? (record.cookies as {
+          get?: (name: string) => { value?: string } | undefined;
+          getAll?: () => Array<{ name: string; value: string }>;
+        })
+      : typeof (record as { get?: unknown; getAll?: unknown }).get === "function" ||
+        typeof (record as { get?: unknown; getAll?: unknown }).getAll === "function"
+      ? (record as {
+          get?: (name: string) => { value?: string } | undefined;
+          getAll?: () => Array<{ name: string; value: string }>;
+        })
+      : null;
+
+  if (cookiesObj) {
+    if (typeof cookiesObj.get === "function") {
       for (const name of SUNSHADE_COOKIE_NAMES) {
-        const c = cookies.get(name);
+        const c = cookiesObj.get(name);
         if (c && c.value) return c.value;
       }
     }
 
-    if (typeof cookies.getAll === "function") {
-      const all = cookies.getAll();
+    if (typeof cookiesObj.getAll === "function") {
+      const all = cookiesObj.getAll();
       for (const c of all) {
         if (c.name.startsWith("sb-") && c.name.endsWith("-auth-token")) {
           try {
@@ -370,6 +380,7 @@ export interface VerifySSOTokenOptions {
   expectedIssuer?: string;
   expectedAudience?: string;
   clockToleranceSec?: number;
+  requireSignature?: boolean;
 }
 
 /**
@@ -410,55 +421,60 @@ export async function verifySSOToken(
     }
   }
 
-  // 3. Issuer check if specified
-  if (options.expectedIssuer && payload.iss) {
-    const validIss =
-      payload.iss === options.expectedIssuer ||
-      payload.iss.includes("sunshade.icu") ||
-      payload.iss === "supabase";
-
-    if (!validIss) {
+  // 3. Issuer check if specified (requires claim to be present)
+  if (options.expectedIssuer) {
+    if (!payload.iss) {
+      return { valid: false, error: `Missing required issuer claim (expected ${options.expectedIssuer}).` };
+    }
+    if (payload.iss !== options.expectedIssuer) {
       return { valid: false, error: `Invalid issuer: expected ${options.expectedIssuer}` };
     }
   }
 
-  // 4. Audience check if specified
-  if (options.expectedAudience && payload.aud) {
+  // 4. Audience check if specified (requires claim to be present)
+  if (options.expectedAudience) {
+    if (!payload.aud) {
+      return { valid: false, error: `Missing required audience claim (expected ${options.expectedAudience}).` };
+    }
     if (payload.aud !== options.expectedAudience && payload.aud !== "authenticated") {
       return { valid: false, error: `Invalid audience: expected ${options.expectedAudience}` };
     }
   }
 
-  // 5. Signature validation via Web Crypto API (if secret provided)
+  // 5. Signature validation via Web Crypto API (if secret provided or in production)
   const secret = options.secret || process.env.SUPABASE_JWT_SECRET;
-  if (secret && typeof crypto !== "undefined" && crypto.subtle) {
-    try {
-      const enc = new TextEncoder();
-      const key = await crypto.subtle.importKey(
-        "raw",
-        enc.encode(secret),
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["verify"]
-      );
+  if (secret) {
+    if (typeof crypto !== "undefined" && crypto.subtle) {
+      try {
+        const enc = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          "raw",
+          enc.encode(secret),
+          { name: "HMAC", hash: "SHA-256" },
+          false,
+          ["verify"]
+        );
 
-      const dataToVerify = enc.encode(`${parts[0]}.${parts[1]}`);
-      const rawSignature = base64UrlDecodeToUint8Array(parts[2]);
+        const dataToVerify = enc.encode(`${parts[0]}.${parts[1]}`);
+        const rawSignature = base64UrlDecodeToUint8Array(parts[2]);
 
-      const isValidSignature = await crypto.subtle.verify(
-        "HMAC",
-        key,
-        rawSignature as unknown as BufferSource,
-        dataToVerify as unknown as BufferSource
-      );
+        const isValidSignature = await crypto.subtle.verify(
+          "HMAC",
+          key,
+          rawSignature as unknown as BufferSource,
+          dataToVerify as unknown as BufferSource
+        );
 
-      if (!isValidSignature) {
-        return { valid: false, error: "Invalid cryptographic signature on SSO token." };
+        if (!isValidSignature) {
+          return { valid: false, error: "Invalid cryptographic signature on SSO token." };
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { valid: false, error: `Signature verification failed: ${msg}` };
       }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return { valid: false, error: `Signature verification failed: ${msg}` };
     }
+  } else if (process.env.NODE_ENV === "production" || options.requireSignature) {
+    return { valid: false, error: "SSO token signature verification failed: secret not configured." };
   }
 
   return { valid: true, payload };
@@ -485,6 +501,8 @@ export interface ValidateSSOHandshakeOptions {
   requireAntiSybil?: boolean;
   secret?: string;
   expectedIssuer?: string;
+  expectedAudience?: string;
+  requireSignature?: boolean;
 }
 
 /**
@@ -511,6 +529,8 @@ export async function validateSSOHandshake(
   const verification = await verifySSOToken(token, {
     secret: options.secret,
     expectedIssuer: options.expectedIssuer,
+    expectedAudience: options.expectedAudience,
+    requireSignature: options.requireSignature,
   });
 
   if (!verification.valid || !verification.payload) {
@@ -607,7 +627,7 @@ export function isVotingRoute(pathname: string, method: string = "GET", headers?
  */
 export function buildSSOLoginRedirect(requestUrl: string, rootDomain: string = "sunshade.icu"): string {
   const returnTo = encodeURIComponent(requestUrl);
-  return `https://auth.${rootDomain}/login?return_to=${returnTo}`;
+  return `https://hub.${rootDomain}/login?redirect=${returnTo}`;
 }
 
 /**
@@ -615,6 +635,6 @@ export function buildSSOLoginRedirect(requestUrl: string, rootDomain: string = "
  */
 export function buildSSOVerifyRedirect(requestUrl: string, rootDomain: string = "sunshade.icu"): string {
   const returnTo = encodeURIComponent(requestUrl);
-  return `https://auth.${rootDomain}/verify?return_to=${returnTo}`;
+  return `https://hub.${rootDomain}/login?redirect=${returnTo}&verify=true`;
 }
 

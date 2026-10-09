@@ -212,6 +212,7 @@ export function useValerieTooltip(options: UseValerieTooltipOptions = {}) {
               word: cleanWord,
               targetLanguage: language,
               targetReadingLevel: String(readingLevel),
+              ...(queryVector && queryVector.length > 0 ? { embedding: queryVector } : {}),
             }),
           });
 
