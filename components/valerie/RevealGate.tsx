@@ -14,10 +14,12 @@ import {
   CheckCircle2,
   Users,
   Grid,
+  Flag,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ValerieTooltip } from "@/components/valerie/ValerieTooltip";
+import { PremiseRejectionBreakdown } from "@/components/valerie/PremiseRejectionBreakdown";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -30,15 +32,51 @@ export interface BivariateVote {
   comment?: string;
 }
 
+export interface PremiseChallenge {
+  flagReason: string;
+  suggestedAxisComment?: string;
+}
+
 export interface RevealGateProps {
   isSubmitted: boolean;
   lockedUntil?: string;    // ISO 8601 string
   userVote?: BivariateVote;
+  userChallenge?: PremiseChallenge;
+  isPremiseChallenge?: boolean;
+  flagReason?: string;
+  suggestedAxisComment?: string;
   pollQuestion?: string;
   totalVotesCount?: number;
   className?: string;
   allowSimulation?: boolean; // Restricted strictly to preview/test harnesses
+  flagStats?: {
+    totalFlags: number;
+    byReason: Record<string, number>;
+  };
 }
+
+const FLAG_REASON_DETAILS: Record<string, { label: string; desc: string; color: string }> = {
+  LOADED_FRAMING: {
+    label: "Loaded Framing",
+    desc: "Loaded or emotionally manipulative wording",
+    color: "border-rose-500/40 bg-rose-950/40 text-rose-300",
+  },
+  FALSE_DICHOTOMY: {
+    label: "False Dichotomy",
+    desc: "Forces a binary choice / misses a key perspective",
+    color: "border-amber-500/40 bg-amber-950/40 text-amber-300",
+  },
+  DISPUTED_PREMISE: {
+    label: "Disputed Premise",
+    desc: "Underlying factual premise is disputed",
+    color: "border-violet-500/40 bg-violet-950/40 text-violet-300",
+  },
+  LOCALE_MISMATCH: {
+    label: "Locale Mismatch",
+    desc: "Not applicable to this geographic scope",
+    color: "border-cyan-500/40 bg-cyan-950/40 text-cyan-300",
+  },
+};
 
 // Bivariate Grid cell definition
 interface GridCell {
@@ -99,11 +137,20 @@ export function RevealGate({
   isSubmitted,
   lockedUntil,
   userVote,
+  userChallenge,
+  isPremiseChallenge = false,
+  flagReason,
+  suggestedAxisComment,
   pollQuestion,
   totalVotesCount = 401,
   className,
   allowSimulation = false,
+  flagStats,
 }: RevealGateProps) {
+  const effectiveFlagReason = flagReason || userChallenge?.flagReason;
+  const effectiveComment = suggestedAxisComment || userChallenge?.suggestedAxisComment;
+  const isChallenge = Boolean(isPremiseChallenge || effectiveFlagReason);
+
   // Client mount tracking to avoid hydration mismatch on timestamps
   const [isMounted, setIsMounted] = useState(false);
   const [now, setNow] = useState<number>(Date.now());
@@ -223,65 +270,138 @@ export function RevealGate({
             {/* Header: Lock confirmation */}
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-cyan-500/40 bg-cyan-950/60 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
-                  <Lock className="h-6 w-6 animate-pulse" />
+                <div
+                  className={cn(
+                    "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border shadow-[0_0_20px_rgba(6,182,212,0.3)]",
+                    isChallenge
+                      ? "border-amber-500/40 bg-amber-950/60 text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.3)]"
+                      : "border-cyan-500/40 bg-cyan-950/60 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.3)]"
+                  )}
+                >
+                  {isChallenge ? (
+                    <Flag className="h-6 w-6 animate-pulse" />
+                  ) : (
+                    <Lock className="h-6 w-6 animate-pulse" />
+                  )}
                   <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-cyan-500" />
+                    <span
+                      className={cn(
+                        "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                        isChallenge ? "bg-amber-400" : "bg-cyan-400"
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "relative inline-flex rounded-full h-3.5 w-3.5",
+                        isChallenge ? "bg-amber-500" : "bg-cyan-500"
+                      )}
+                    />
                   </span>
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-base font-bold text-slate-100">
-                      Bivariate Vote Sealed
+                      {isChallenge ? "Premise Challenge Recorded" : "Bivariate Vote Sealed"}
                     </h3>
-                    <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/40 text-[10px]">
-                      Committed
+                    <Badge
+                      className={cn(
+                        "text-[10px] font-semibold leading-normal",
+                        isChallenge
+                          ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                          : "bg-cyan-500/20 text-cyan-300 border-cyan-500/40"
+                      )}
+                    >
+                      {isChallenge
+                        ? "Premise Challenge Recorded — Community Results & Flag Telemetry Unlock in 24h"
+                        : "Committed"}
                     </Badge>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Your response is securely committed. Individual votes remain private until reveal.
+                    {isChallenge
+                      ? "Your diagnostic challenge is cryptographically committed. Community results unlock after 24h."
+                      : "Your response is securely committed. Individual votes remain private until reveal."}
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Committed Coordinates Snapshot */}
-            {userVote && (
-              <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                <div className="space-y-1">
+            {/* Committed Coordinates Snapshot OR Challenge Details */}
+            {isChallenge ? (
+              <div className="rounded-xl border border-amber-500/30 bg-slate-900/60 p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium text-slate-400">
-                    Your Sentiment
+                    Your Diagnostic Challenge
                   </span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "font-mono text-base font-bold px-2.5 py-0.5 rounded-md border",
-                        LIKERT_INFO[userVote.likertScore]?.bg
-                      )}
-                    >
-                      {userVote.likertScore > 0 ? `+${userVote.likertScore}` : userVote.likertScore}
-                    </span>
-                    <span className="text-xs font-semibold text-slate-200 truncate">
-                      {LIKERT_INFO[userVote.likertScore]?.label}
-                    </span>
-                  </div>
+                  <span className="font-mono text-[10px] text-amber-400">
+                    24h Commit-and-Reveal Active
+                  </span>
                 </div>
-
-                <div className="space-y-1">
-                  <span className="text-[11px] font-medium text-slate-400">
-                    Your Certainty
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-base font-bold text-cyan-400 bg-cyan-950/60 px-2.5 py-0.5 rounded-md border border-cyan-500/30">
-                      {userVote.confidenceScore}%
-                    </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-xs font-semibold px-2.5 py-0.5 border",
+                      effectiveFlagReason && FLAG_REASON_DETAILS[effectiveFlagReason]
+                        ? FLAG_REASON_DETAILS[effectiveFlagReason].color
+                        : "border-amber-500/40 bg-amber-950/40 text-amber-300"
+                    )}
+                  >
+                    {effectiveFlagReason && FLAG_REASON_DETAILS[effectiveFlagReason]
+                      ? FLAG_REASON_DETAILS[effectiveFlagReason].label
+                      : effectiveFlagReason || "Premise Challenge"}
+                  </Badge>
+                  {effectiveFlagReason && FLAG_REASON_DETAILS[effectiveFlagReason] && (
                     <span className="text-xs text-slate-300">
-                      Confidence Gauge
+                      {FLAG_REASON_DETAILS[effectiveFlagReason].desc}
                     </span>
+                  )}
+                </div>
+                {effectiveComment && (
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/80 p-3 text-xs text-slate-200 mt-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400/90 block mb-1">
+                      Identified Missing Perspective / Axis:
+                    </span>
+                    <p className="italic text-slate-100">&ldquo;{effectiveComment}&rdquo;</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              userVote && (
+                <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-medium text-slate-400">
+                      Your Sentiment
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "font-mono text-base font-bold px-2.5 py-0.5 rounded-md border",
+                          LIKERT_INFO[userVote.likertScore]?.bg
+                        )}
+                      >
+                        {userVote.likertScore > 0 ? `+${userVote.likertScore}` : userVote.likertScore}
+                      </span>
+                      <span className="text-xs font-semibold text-slate-200 truncate">
+                        {LIKERT_INFO[userVote.likertScore]?.label}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-medium text-slate-400">
+                      Your Certainty
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-base font-bold text-cyan-400 bg-cyan-950/60 px-2.5 py-0.5 rounded-md border border-cyan-500/30">
+                        {userVote.confidenceScore}%
+                      </span>
+                      <span className="text-xs text-slate-300">
+                        Confidence Gauge
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )
             )}
 
             {/* Countdown Display Card */}
@@ -524,6 +644,14 @@ export function RevealGate({
                 })}
               </div>
             </div>
+
+            {/* ── Premise Rejection Breakdown (Diagnostic Bar) ─────────── */}
+            <PremiseRejectionBreakdown
+              userFlagReason={effectiveFlagReason}
+              totalVotes={totalVotesCount}
+              totalFlags={flagStats?.totalFlags}
+              breakdown={flagStats?.byReason}
+            />
 
             {/* Footer Insights Note */}
             <div className="rounded-lg bg-cyan-950/30 border border-cyan-500/20 p-3 text-center text-xs text-cyan-300 flex items-center justify-center gap-2">

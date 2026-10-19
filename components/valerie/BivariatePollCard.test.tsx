@@ -4,11 +4,17 @@ import { BivariatePollCard } from "./BivariatePollCard";
 
 const mockCastVote = vi.fn();
 const mockSubmitVote = vi.fn();
+const mockFlagPollWithCommitGate = vi.fn();
 
-// Mock submitVote and castVote server actions
+// Mock server actions
 vi.mock("@/app/actions/vote", () => ({
   castVote: (...args: any[]) => mockCastVote(...args),
   submitVote: (...args: any[]) => mockSubmitVote(...args),
+}));
+
+vi.mock("@/app/actions/valerieFlagActions", () => ({
+  flagPollWithCommitGate: (...args: any[]) => mockFlagPollWithCommitGate(...args),
+  VALID_FLAG_REASONS: ["LOADED_FRAMING", "FALSE_DICHOTOMY", "DISPUTED_PREMISE", "LOCALE_MISMATCH"],
 }));
 
 describe("BivariatePollCard Component", () => {
@@ -22,9 +28,14 @@ describe("BivariatePollCard Component", () => {
       success: true,
       lockedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     });
+    mockFlagPollWithCommitGate.mockResolvedValue({
+      success: true,
+      lockedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      flagId: "flag-abc-123",
+    });
   });
 
-  it("renders poll category, interactive question, and bivariate controls", () => {
+  it("renders poll category, interactive question, bivariate controls, and Challenge button", () => {
     render(
       <BivariatePollCard
         pollId="test-poll-1"
@@ -38,6 +49,7 @@ describe("BivariatePollCard Component", () => {
     expect(screen.getByText(/1\. Sentiment Direction/i)).toBeInTheDocument();
     expect(screen.getByText(/2\. Certainty & Importance/i)).toBeInTheDocument();
     expect(screen.getByText(/Commit & Seal Bivariate Vote/i)).toBeInTheDocument();
+    expect(screen.getByText(/Challenge Premise \/ Framing/i)).toBeInTheDocument();
   });
 
   it("completely omits community vote results from DOM prior to submission", () => {
@@ -153,5 +165,109 @@ describe("BivariatePollCard Component", () => {
     expect(screen.getByText(/You must be signed in to vote/i)).toBeInTheDocument();
     expect(screen.queryByText(/Bivariate Vote Sealed/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Commit & Seal Bivariate Vote/i)).toBeInTheDocument();
+  });
+
+  it("toggles PremiseChallengeDrawer and renders 4 diagnostic pills", async () => {
+    render(
+      <BivariatePollCard
+        pollId="poll-flag-test"
+        questionText="Controversial Civic Proposal"
+      />
+    );
+
+    // Drawer should initially not be visible
+    expect(screen.queryByText(/Loaded Framing/i)).not.toBeInTheDocument();
+
+    // Click Challenge Premise / Framing button
+    const challengeBtn = screen.getByText(/Challenge Premise \/ Framing/i);
+    fireEvent.click(challengeBtn);
+
+    // 4 diagnostic pills should now be visible
+    expect(screen.getByText(/Loaded Framing/i)).toBeInTheDocument();
+    expect(screen.getByText(/Loaded or emotionally manipulative wording/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/False Dichotomy/i)).toBeInTheDocument();
+    expect(screen.getByText(/Forces a binary choice \/ misses a key perspective/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/Disputed Premise/i)).toBeInTheDocument();
+    expect(screen.getByText(/Underlying factual premise is disputed/i)).toBeInTheDocument();
+
+    expect(screen.getByText(/Locale Mismatch/i)).toBeInTheDocument();
+    expect(screen.getByText(/Not applicable to this geographic scope/i)).toBeInTheDocument();
+  });
+
+  it("reveals missing perspective textarea when FALSE_DICHOTOMY is selected", async () => {
+    render(
+      <BivariatePollCard
+        pollId="poll-flag-test"
+        questionText="Controversial Civic Proposal"
+      />
+    );
+
+    // Open drawer
+    fireEvent.click(screen.getByText(/Challenge Premise \/ Framing/i));
+
+    // Textarea should not be visible before selecting FALSE_DICHOTOMY
+    expect(screen.queryByLabelText(/What perspective or axis is missing\?/i)).not.toBeInTheDocument();
+
+    // Click False Dichotomy pill
+    fireEvent.click(screen.getByText(/False Dichotomy/i));
+
+    // Textarea must now be visible with 240 char limit
+    const axisInput = screen.getByLabelText(/What perspective or axis is missing\?/i);
+    expect(axisInput).toBeInTheDocument();
+    expect(axisInput).toHaveAttribute("maxLength", "240");
+  });
+
+  it("submits premise challenge via flagPollWithCommitGate and transitions directly to RevealGate with badge", async () => {
+    const onFlagSuccess = vi.fn();
+
+    render(
+      <BivariatePollCard
+        pollId="poll-flag-123"
+        questionText="Civic Proposition"
+        onFlagSuccess={onFlagSuccess}
+      />
+    );
+
+    // Open challenge drawer
+    fireEvent.click(screen.getByText(/Challenge Premise \/ Framing/i));
+
+    // Select False Dichotomy
+    fireEvent.click(screen.getByText(/False Dichotomy/i));
+
+    // Fill missing perspective
+    const axisInput = screen.getByLabelText(/What perspective or axis is missing\?/i);
+    fireEvent.change(axisInput, { target: { value: "A hybrid zoning approach is needed" } });
+
+    // Submit challenge
+    const recordBtn = screen.getByText(/Record Premise Challenge/i);
+    await act(async () => {
+      fireEvent.click(recordBtn);
+    });
+
+    // Verify flagPollWithCommitGate was called with structured arguments
+    expect(mockFlagPollWithCommitGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pollId: "poll-flag-123",
+        flagReason: "FALSE_DICHOTOMY",
+        suggestedAxisComment: "A hybrid zoning approach is needed",
+      })
+    );
+
+    // Transitions card smoothly into RevealGate locked state with required badge
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Premise Challenge Recorded/i })).toBeInTheDocument();
+      expect(
+        screen.getByText(/Premise Challenge Recorded — Community Results & Flag Telemetry Unlock in 24h/i)
+      ).toBeInTheDocument();
+      expect(screen.getByText(/A hybrid zoning approach is needed/i)).toBeInTheDocument();
+      expect(screen.getByText(/Full Community Bivariate Matrix Unlocks In:/i)).toBeInTheDocument();
+    });
+
+    expect(onFlagSuccess).toHaveBeenCalledWith({
+      flagReason: "FALSE_DICHOTOMY",
+      suggestedAxisComment: "A hybrid zoning approach is needed",
+    });
   });
 });
