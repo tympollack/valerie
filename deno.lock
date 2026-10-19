@@ -55,6 +55,8 @@
     "packageJson": {
       "dependencies": [
         "npm:@base-ui/react@^1.6.0",
+        "npm:@digitalcanopy/supabase@0.1",
+        "npm:@digitalcanopy/ui@~0.1.2",
         "npm:@supabase/ssr@~0.5.2",
         "npm:@supabase/supabase-js@^2.49.1",
         "npm:@tailwindcss/postcss@4",
@@ -63,6 +65,7 @@
         "npm:@testing-library/react@^16.3.3",
         "npm:@types/node@20",
         "npm:@types/react-dom@19",
+        "npm:@types/react-native@~0.72.8",
         "npm:@types/react@19",
         "npm:class-variance-authority@~0.7.1",
         "npm:clsx@^2.1.1",
@@ -76,6 +79,7 @@
         "npm:prettier-plugin-tailwindcss@0.8",
         "npm:prettier@^3.8.3",
         "npm:react-dom@19.2.4",
+        "npm:react-native-web@~0.21.3",
         "npm:react@19.2.4",
         "npm:shadcn@^4.13.0",
         "npm:tailwind-merge@^3.6.0",
