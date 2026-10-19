@@ -26,6 +26,7 @@ import {
   calculateIncrementalVariance,
   computeBifurcatedCentroids,
 } from "./vector-math.ts";
+import { spawnAxisFour } from "./spawnAxisFour.ts";
 
 const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Origin": "*",
@@ -499,7 +500,22 @@ export async function handleClusterRequest(req: Request): Promise<Response> {
       }
     }
 
-    const payload: ClusterEngineRequest = await req.json();
+    const body: any = await req.json();
+
+    // Check if this is an Axis-4 follow-up spawn request
+    if (body.action === "SPAWN_AXIS_4" || body.spawn_axis_four) {
+      if (!body.poll_id) {
+        return jsonResponse({ error: "poll_id required for SPAWN_AXIS_4 action" }, 400);
+      }
+      const axis4Result = await spawnAxisFour(body.poll_id, {
+        supabase: supabaseAdmin,
+        openaiApiKey: openAiApiKey,
+        dryRun: body.dryRun === true,
+      });
+      return jsonResponse(axis4Result);
+    }
+
+    const payload: ClusterEngineRequest = body;
 
     if (
       typeof payload.likert_score !== "number" ||

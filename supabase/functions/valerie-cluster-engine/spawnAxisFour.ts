@@ -43,14 +43,16 @@ export interface SpawnAxisFourResult {
 /**
  * Parses vector representation from pgvector string or array.
  */
-export function parseVectorSafely(val: number[] | string | null | undefined): number[] {
-  if (Array.isArray(val)) return val;
+export function parseVectorSafely(val: number[] | string | null | undefined): number[] | null {
+  if (!val) return null;
+  if (Array.isArray(val)) return val.length > 0 ? val : null;
   if (typeof val === "string") {
     const cleaned = val.trim().replace(/^\[|\]$/g, "");
-    if (!cleaned) return new Array(VECTOR_DIM).fill(0);
-    return cleaned.split(",").map((num) => parseFloat(num.trim()));
+    if (!cleaned) return null;
+    const nums = cleaned.split(",").map((num) => parseFloat(num.trim()));
+    return nums.length > 0 ? nums : null;
   }
-  return new Array(VECTOR_DIM).fill(0);
+  return null;
 }
 
 /**
@@ -248,12 +250,16 @@ export async function synthesizeAxisFourQuestion(
   }
 
   // If still >= 0.15 after 2 rewrites, force neutral formulation
-  candidateQuestion = `Whether public policy should integrate community-identified procedural alternatives when evaluating outcomes under: ${parentQuestion.replace(/\?$/, "")}.`;
+  const cleanParent = parentQuestion
+    .replace(/[?!.]+$/, "")
+    .replace(/\b(obviously|clearly|reckless|draconian|tyrannical|disastrous|corrupt|unjust|radical)\b/gi, "")
+    .trim();
+  candidateQuestion = `Whether administrative guidelines should provide structured alternatives when assessing outcomes related to: ${cleanParent}.`;
   auditResult = await auditCynicBias(candidateQuestion, openaiApiKey);
 
   return {
     question: candidateQuestion,
-    cynic_bias_score: Math.min(0.12, auditResult.cynic_bias_score),
+    cynic_bias_score: auditResult.cynic_bias_score,
   };
 }
 
@@ -284,23 +290,25 @@ export async function spawnAxisFour(
     parentPoll = pollData;
   }
 
-  // 2. Check for existing community-spawned axis (IDEMPOTENCY INVARIANT)
+  // 2. Check for existing community-spawned axis for THIS specific parent poll (IDEMPOTENCY INVARIANT)
   if (supabase) {
-    const { data: existingAxis } = await supabase
+    const { data: existingAxes } = await supabase
       .schema("valerie")
       .from("polls")
-      .select("id, question_text")
-      .eq("axis_category", "COMMUNITY_SPAWNED_AXIS")
-      .or(`source_ingest_id.eq.${parentPoll?.source_ingest_id || pollId},id.eq.${pollId}`)
-      .maybeSingle();
+      .select("id, question_text, related_ecosystem_refs")
+      .eq("axis_category", "COMMUNITY_SPAWNED_AXIS");
 
-    if (existingAxis) {
+    const match = (existingAxes || []).find((p: any) =>
+      p.related_ecosystem_refs?.parent_poll_id === pollId
+    );
+
+    if (match) {
       return {
         success: true,
         spawned: false,
         reason: "AXIS_4_ALREADY_EXISTS",
-        poll_id: existingAxis.id,
-        question_text: existingAxis.question_text,
+        poll_id: match.id,
+        question_text: match.question_text,
       };
     }
   }
@@ -352,8 +360,23 @@ export async function spawnAxisFour(
     options?.openaiApiKey
   );
 
-  // 6. Insert new poll into valerie.polls
+  if (cynic_bias_score >= 0.15) {
+    return {
+      success: false,
+      spawned: false,
+      reason: `CYNIC_REJECTED: Synthesized question scored ${cynic_bias_score.toFixed(3)} >= 0.15 on cynicism audit.`,
+      cynic_bias_score,
+      top_objections: topComments,
+    };
+  }
+
+  // 6. Insert new poll into valerie.polls linked to parent_poll_id
   let newPollId = crypto.randomUUID();
+  const ecosystemRefs = {
+    ...(parentPoll?.related_ecosystem_refs || {}),
+    parent_poll_id: pollId,
+  };
+
   if (supabase && !options?.dryRun) {
     const { data: inserted, error } = await supabase
       .schema("valerie")
@@ -368,7 +391,7 @@ export async function spawnAxisFour(
         target_locale_code: parentPoll?.target_locale_code || null,
         detected_locales: parentPoll?.detected_locales || [],
         source_urls: parentPoll?.source_urls || [],
-        related_ecosystem_refs: parentPoll?.related_ecosystem_refs || {},
+        related_ecosystem_refs: ecosystemRefs,
       })
       .select("id")
       .single();

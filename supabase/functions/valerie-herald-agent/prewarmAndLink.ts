@@ -277,6 +277,7 @@ export async function prewarmTooltips(
   options?: {
     supabase?: any;
     openaiApiKey?: string;
+    dryRun?: boolean;
   }
 ): Promise<PrewarmResult[]> {
   const terms = await extractComplexTerms(questionText, options?.openaiApiKey);
@@ -314,13 +315,14 @@ export async function prewarmTooltips(
       const definition = await generateNeutralDefinition(term, level, options?.openaiApiKey);
       const embedding = await generateEmbedding(`${term}: ${definition}`, options?.openaiApiKey);
 
-      if (options?.supabase) {
+      if (options?.supabase && !options?.dryRun) {
         await options.supabase
           .schema("valerie")
           .from("content_cache")
           .upsert(
             {
               original_text_hash: hash,
+              original_text: term,
               target_language: "en",
               target_reading_level: level,
               cached_translation: definition,
@@ -352,6 +354,7 @@ export async function linkEcosystemRefs(
   detectedLocales: string[] = [],
   options?: {
     supabase?: any;
+    openaiApiKey?: string;
   }
 ): Promise<EcosystemRefs> {
   const refs: EcosystemRefs = {
@@ -376,7 +379,9 @@ export async function linkEcosystemRefs(
         const narrative = row.incident_narrative || "";
         const agency = row.source_agency || "";
         const textToEmbed = `${agency} ${narrative}`;
-        const rowEmbedding = generateDeterministicEmbedding(textToEmbed);
+        const rowEmbedding = options?.openaiApiKey
+          ? await generateEmbedding(textToEmbed, options.openaiApiKey)
+          : generateDeterministicEmbedding(textToEmbed);
         const sim = cosineSimilarity(eventEmbedding, rowEmbedding);
 
         const localeMatch = detectedLocales.some((loc) =>
@@ -403,7 +408,9 @@ export async function linkEcosystemRefs(
     if (Array.isArray(pwRows)) {
       for (const row of pwRows) {
         const text = `${row.title || ""} ${row.description || ""}`;
-        const rowEmbedding = generateDeterministicEmbedding(text);
+        const rowEmbedding = options?.openaiApiKey
+          ? await generateEmbedding(text, options.openaiApiKey)
+          : generateDeterministicEmbedding(text);
         const sim = cosineSimilarity(eventEmbedding, rowEmbedding);
 
         const localeMatch = detectedLocales.some((loc) =>
@@ -434,6 +441,7 @@ export async function prewarmAndLink(
   options?: {
     supabase?: any;
     openaiApiKey?: string;
+    dryRun?: boolean;
   }
 ): Promise<PrewarmAndLinkSummary> {
   // 1. Pre-warm tooltip definitions in cache
@@ -443,7 +451,7 @@ export async function prewarmAndLink(
   const ecosystemRefs = await linkEcosystemRefs(eventEmbedding, detectedLocales, options);
 
   // 3. Update valerie.polls with related_ecosystem_refs
-  if (options?.supabase && pollId) {
+  if (options?.supabase && !options?.dryRun && pollId) {
     await options.supabase
       .schema("valerie")
       .from("polls")

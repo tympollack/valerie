@@ -154,7 +154,9 @@ export async function agent1DecomposeEvent(
   summary: string,
   openaiApiKey?: string,
   retryCategory?: string,
-  previousFeedback?: string
+  previousFeedback?: string,
+  scopeTier: "LOCAL" | "STATE" | "NATIONAL" | "GLOBAL" = "NATIONAL",
+  detectedLocales: string[] = ["US"]
 ): Promise<DecomposedAxis[]> {
   if (openaiApiKey) {
     try {
@@ -199,8 +201,8 @@ CRITICAL RULES:
           return parsed.slice(0, 3).map((item) => ({
             category: item.category,
             question_text: item.question_text,
-            scope_tier: item.scope_tier || "NATIONAL",
-            detected_locales: Array.isArray(item.detected_locales) ? item.detected_locales : ["US"],
+            scope_tier: item.scope_tier || scopeTier,
+            detected_locales: Array.isArray(item.detected_locales) && item.detected_locales.length > 0 ? item.detected_locales : detectedLocales,
             attempts: 1,
           }));
         }
@@ -210,28 +212,28 @@ CRITICAL RULES:
     }
   }
 
-  // Deterministic neutral decomposition fallback
+  // Deterministic neutral decomposition fallback preserving actual jurisdiction
   const cleanHeadline = stripPartisanFraming(headline);
   return [
     {
       category: "PRINCIPLE",
       question_text: `Whether public policy should prioritize collective civic stability over individual transactional autonomy in matters concerning ${cleanHeadline.toLowerCase()}.`,
-      scope_tier: "NATIONAL",
-      detected_locales: ["US"],
+      scope_tier: scopeTier,
+      detected_locales: detectedLocales,
       attempts: 1,
     },
     {
       category: "ETHICS_LAW",
       question_text: `Whether statutory regulatory authority should supersede local municipality self-determination regarding ${cleanHeadline.toLowerCase()}.`,
-      scope_tier: "NATIONAL",
-      detected_locales: ["US"],
+      scope_tier: scopeTier,
+      detected_locales: detectedLocales,
       attempts: 1,
     },
     {
       category: "REALPOLITIK",
       question_text: `Whether the immediate fiscal and economic compliance expenditures associated with ${cleanHeadline.toLowerCase()} are justified by long-term structural outcomes.`,
-      scope_tier: "NATIONAL",
-      detected_locales: ["US"],
+      scope_tier: scopeTier,
+      detected_locales: detectedLocales,
       attempts: 1,
     },
   ];
@@ -331,10 +333,20 @@ export async function agent2CynicReferee(
 export async function runAdversarialRefereePipeline(
   headline: string,
   summary: string,
-  openaiApiKey?: string
+  openaiApiKey?: string,
+  scopeTier: "LOCAL" | "STATE" | "NATIONAL" | "GLOBAL" = "NATIONAL",
+  detectedLocales: string[] = ["US"]
 ): Promise<{ passed: boolean; axes: DecomposedAxis[]; rejectedReason?: string }> {
   // Step 1: Agent 1 initial decomposition
-  const axes = await agent1DecomposeEvent(headline, summary, openaiApiKey);
+  const axes = await agent1DecomposeEvent(
+    headline,
+    summary,
+    openaiApiKey,
+    undefined,
+    undefined,
+    scopeTier,
+    detectedLocales
+  );
 
   for (let i = 0; i < axes.length; i++) {
     const axis = axes[i];
@@ -344,15 +356,18 @@ export async function runAdversarialRefereePipeline(
     // If score >= 0.15, force rewrite up to 2 times
     while (audit.cynic_bias_score >= 0.15 && attempts <= 2) {
       attempts++;
-      const [revised] = await agent1DecomposeEvent(
+      const revisedAxes = await agent1DecomposeEvent(
         headline,
         summary,
         openaiApiKey,
         axis.category,
-        audit.feedback
+        audit.feedback,
+        scopeTier,
+        detectedLocales
       );
-      if (revised) {
-        axis.question_text = revised.question_text;
+      const matchingRevised = revisedAxes.find((a) => a.category === axis.category) || revisedAxes[0];
+      if (matchingRevised) {
+        axis.question_text = matchingRevised.question_text;
       }
       audit = await agent2CynicReferee(axis.question_text, openaiApiKey);
     }
@@ -382,20 +397,23 @@ export async function runAdversarialRefereePipeline(
 export async function checkSemanticDeduplication(
   eventEmbedding: number[],
   supabase?: any
-): Promise<{ isDuplicate: boolean; duplicateId?: string; existingUrls?: string[] }> {
+): Promise<{ isDuplicate: boolean; duplicateId?: string; existingUrls?: string[]; clusterId?: string }> {
   if (!supabase) {
     return { isDuplicate: false };
   }
 
   try {
     const seventyTwoHoursAgo = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+    // 1. Check recent news_ingest_queue entries within 72h
     const { data: recentIngests } = await supabase
       .schema("valerie")
       .from("news_ingest_queue")
       .select("id, event_title, event_embedding, source_urls, status")
       .gte("created_at", seventyTwoHoursAgo)
       .neq("status", "merged_duplicate")
-      .limit(50);
+      .neq("status", "failed")
+      .order("created_at", { ascending: false })
+      .limit(100);
 
     if (Array.isArray(recentIngests)) {
       for (const row of recentIngests) {
@@ -419,6 +437,39 @@ export async function checkSemanticDeduplication(
             isDuplicate: true,
             duplicateId: row.id,
             existingUrls: urls,
+          };
+        }
+      }
+    }
+
+    // 2. Check active centroids in valerie.topic_clusters
+    const { data: activeClusters } = await supabase
+      .schema("valerie")
+      .from("topic_clusters")
+      .select("id, cluster_name, centroid_vector")
+      .eq("is_active", true)
+      .limit(100);
+
+    if (Array.isArray(activeClusters)) {
+      for (const cluster of activeClusters) {
+        if (!cluster.centroid_vector) continue;
+        let clusterVec: number[];
+        if (Array.isArray(cluster.centroid_vector)) {
+          clusterVec = cluster.centroid_vector;
+        } else if (typeof cluster.centroid_vector === "string") {
+          clusterVec = cluster.centroid_vector
+            .replace(/^\[|\]$/g, "")
+            .split(",")
+            .map((s: string) => parseFloat(s.trim()));
+        } else {
+          continue;
+        }
+
+        const sim = cosineSimilarity(eventEmbedding, clusterVec);
+        if (sim > 0.90) {
+          return {
+            isDuplicate: true,
+            clusterId: cluster.id,
           };
         }
       }
@@ -460,22 +511,23 @@ export async function processHeraldIngest(
   const eventEmbedding = await getEventEmbedding(coreEventText, options?.openaiApiKey);
   const sourceUrls = cluster.sources.map((s) => s.url);
 
-  // 3. Semantic Deduplication (pgvector similarity > 0.90 within 72h)
+  // 3. Semantic Deduplication (pgvector similarity > 0.90 within 72h or against active clusters)
   const deduplication = await checkSemanticDeduplication(eventEmbedding, supabase);
-  if (deduplication.isDuplicate && deduplication.duplicateId) {
-    // Merge into existing ingest
+  if (deduplication.isDuplicate) {
+    const dupId = deduplication.duplicateId || deduplication.clusterId;
     if (supabase && !options?.dryRun) {
-      const mergedUrls = Array.from(new Set([...(deduplication.existingUrls || []), ...sourceUrls]));
-      await supabase
-        .schema("valerie")
-        .from("news_ingest_queue")
-        .update({
-          source_urls: mergedUrls,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", deduplication.duplicateId);
+      if (deduplication.duplicateId) {
+        const mergedUrls = Array.from(new Set([...(deduplication.existingUrls || []), ...sourceUrls]));
+        await supabase
+          .schema("valerie")
+          .from("news_ingest_queue")
+          .update({
+            source_urls: mergedUrls,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", deduplication.duplicateId);
+      }
 
-      // Record duplicate entry in queue
       await supabase
         .schema("valerie")
         .from("news_ingest_queue")
@@ -487,7 +539,7 @@ export async function processHeraldIngest(
           source_urls: sourceUrls,
           controversy_score: cluster.controversy_dispersion,
           status: "merged_duplicate",
-          metadata: { duplicate_of: deduplication.duplicateId },
+          metadata: { duplicate_of: dupId },
         });
     }
 
@@ -496,16 +548,39 @@ export async function processHeraldIngest(
       headline: cluster.headline,
       status: "merged_duplicate",
       controversy_dispersion: cluster.controversy_dispersion,
-      duplicate_of_id: deduplication.duplicateId,
-      reason: `Merged as duplicate of existing ingest ${deduplication.duplicateId} (cosine similarity > 0.90).`,
+      duplicate_of_id: dupId,
+      reason: `Merged as duplicate of existing ingest or cluster ${dupId} (cosine similarity > 0.90).`,
     };
+  }
+
+  // Stage Ingest Queue Record as 'processing' (ensures atomicity and traceability)
+  if (supabase && !options?.dryRun) {
+    await supabase
+      .schema("valerie")
+      .from("news_ingest_queue")
+      .insert({
+        id: ingestId,
+        event_title: cluster.headline,
+        event_description: cluster.summary,
+        event_embedding: formatVectorForPg(eventEmbedding),
+        source_urls: sourceUrls,
+        controversy_score: cluster.controversy_dispersion,
+        status: "processing",
+        metadata: {
+          scope_tier: cluster.scope_tier,
+          detected_locales: cluster.detected_locales,
+          started_at: new Date().toISOString(),
+        },
+      });
   }
 
   // 4. Adversarial Dual-Agent IRT Decomposition (Agent 1 + Agent 2 Referee)
   const pipeline = await runAdversarialRefereePipeline(
     cluster.headline,
     cluster.summary,
-    options?.openaiApiKey
+    options?.openaiApiKey,
+    cluster.scope_tier,
+    cluster.detected_locales
   );
 
   if (!pipeline.passed) {
@@ -513,16 +588,14 @@ export async function processHeraldIngest(
       await supabase
         .schema("valerie")
         .from("news_ingest_queue")
-        .insert({
-          id: ingestId,
-          event_title: cluster.headline,
-          event_description: cluster.summary,
-          event_embedding: formatVectorForPg(eventEmbedding),
-          source_urls: sourceUrls,
-          controversy_score: cluster.controversy_dispersion,
+        .update({
           status: "cynic_rejected",
-          metadata: { rejection_reason: pipeline.rejectedReason },
-        });
+          metadata: {
+            rejection_reason: pipeline.rejectedReason,
+            axes: pipeline.axes,
+          },
+        })
+        .eq("id", ingestId);
     }
 
     return {
@@ -535,72 +608,95 @@ export async function processHeraldIngest(
     };
   }
 
-  // 5. Tooltip Pre-Warming, Ecosystem Linking & Auto-Publication
+  // 5. Tooltip Pre-Warming, Ecosystem Linking & Auto-Publication with Rollback Guard
   const publishedPollIds: string[] = [];
 
-  for (const axis of pipeline.axes) {
-    const pollId = crypto.randomUUID();
+  try {
+    for (const axis of pipeline.axes) {
+      const pollId = crypto.randomUUID();
 
-    // Pre-warm tooltip cache and link ecosystem UUIDs (PatchWork & Speak for the Dead)
-    const { related_ecosystem_refs } = await prewarmAndLink(
-      pollId,
-      axis.question_text,
-      eventEmbedding,
-      axis.detected_locales,
-      {
-        supabase,
-        openaiApiKey: options?.openaiApiKey,
+      // Pre-warm tooltip cache and link ecosystem UUIDs (PatchWork & Speak for the Dead)
+      const { related_ecosystem_refs } = await prewarmAndLink(
+        pollId,
+        axis.question_text,
+        eventEmbedding,
+        axis.detected_locales,
+        {
+          supabase,
+          openaiApiKey: options?.openaiApiKey,
+          dryRun: options?.dryRun,
+        }
+      );
+
+      // Insert active poll into valerie.polls
+      if (supabase && !options?.dryRun) {
+        const { error: pollError } = await supabase
+          .schema("valerie")
+          .from("polls")
+          .insert({
+            id: pollId,
+            question_text: axis.question_text,
+            is_active: true,
+            scope_tier: axis.scope_tier,
+            target_locale_code: axis.detected_locales[0] || null,
+            detected_locales: axis.detected_locales,
+            source_ingest_id: ingestId,
+            source_urls: sourceUrls,
+            axis_category: axis.category,
+            related_ecosystem_refs,
+          });
+
+        if (pollError) {
+          throw new Error(`Failed to insert poll: ${pollError.message}`);
+        }
       }
-    );
 
-    // Insert active poll into valerie.polls
-    if (supabase && !options?.dryRun) {
-      const { error: pollError } = await supabase
-        .schema("valerie")
-        .from("polls")
-        .insert({
-          id: pollId,
-          question_text: axis.question_text,
-          is_active: true,
-          scope_tier: axis.scope_tier,
-          target_locale_code: axis.detected_locales[0] || null,
-          detected_locales: axis.detected_locales,
-          source_ingest_id: ingestId,
-          source_urls: sourceUrls,
-          axis_category: axis.category,
-          related_ecosystem_refs,
-        });
-
-      if (pollError) {
-        throw new Error(`Failed to insert poll: ${pollError.message}`);
-      }
+      publishedPollIds.push(pollId);
     }
 
-    publishedPollIds.push(pollId);
-  }
+    // Complete ingestion: update status to 'auto_published'
+    if (supabase && !options?.dryRun) {
+      await supabase
+        .schema("valerie")
+        .from("news_ingest_queue")
+        .update({
+          status: "auto_published",
+          published_poll_ids: publishedPollIds,
+          metadata: {
+            decomposed_axes: pipeline.axes.map((a) => ({
+              category: a.category,
+              bias_score: a.cynic_bias_score,
+              attempts: a.attempts,
+            })),
+            completed_at: new Date().toISOString(),
+          },
+        })
+        .eq("id", ingestId);
+    }
+  } catch (publishError: any) {
+    // Rollback on partial publication failure: deactivate published polls and mark queue row as 'failed'
+    if (supabase && !options?.dryRun) {
+      if (publishedPollIds.length > 0) {
+        await supabase
+          .schema("valerie")
+          .from("polls")
+          .update({ is_active: false })
+          .in("id", publishedPollIds);
+      }
 
-  // Record completed ingestion in valerie.news_ingest_queue
-  if (supabase && !options?.dryRun) {
-    await supabase
-      .schema("valerie")
-      .from("news_ingest_queue")
-      .insert({
-        id: ingestId,
-        event_title: cluster.headline,
-        event_description: cluster.summary,
-        event_embedding: formatVectorForPg(eventEmbedding),
-        source_urls: sourceUrls,
-        controversy_score: cluster.controversy_dispersion,
-        status: "auto_published",
-        published_poll_ids: publishedPollIds,
-        metadata: {
-          decomposed_axes: pipeline.axes.map((a) => ({
-            category: a.category,
-            bias_score: a.cynic_bias_score,
-            attempts: a.attempts,
-          })),
-        },
-      });
+      await supabase
+        .schema("valerie")
+        .from("news_ingest_queue")
+        .update({
+          status: "failed",
+          metadata: {
+            error: publishError?.message || String(publishError),
+            failed_at: new Date().toISOString(),
+          },
+        })
+        .eq("id", ingestId);
+    }
+    throw publishError;
   }
 
   return {
@@ -636,11 +732,61 @@ export async function handleHeraldRequest(req: Request): Promise<Response> {
       }
     }
 
-    // Direct event ingestion payload
+    // 1. Authorization Verification (SEC_0001)
+    const authHeader = req.headers.get("Authorization");
+    const cronSecretHeader = req.headers.get("x-cron-secret");
+    const expectedCronSecret = Deno.env.get("CRON_SECRET");
+
+    const isCronAuthorized = Boolean(
+      expectedCronSecret && cronSecretHeader === expectedCronSecret
+    );
+    const isServiceKeyAuthorized = Boolean(
+      authHeader &&
+      supabaseServiceKey &&
+      authHeader.replace(/^Bearer\s+/i, "").trim() === supabaseServiceKey
+    );
+
+    let isUserAuthorized = false;
+    if (!isCronAuthorized && !isServiceKeyAuthorized && authHeader && supabase) {
+      const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+      const { data: userData } = await supabase.auth.getUser(token);
+      if (userData?.user) {
+        isUserAuthorized = true;
+      }
+    }
+
+    if (!isCronAuthorized && !isServiceKeyAuthorized && !isUserAuthorized && !body.dryRun) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
+    // 2. Direct event ingestion payload with bounds validation (SEC_0002)
     if (body.headline) {
+      if (
+        typeof body.headline !== "string" ||
+        body.headline.trim().length === 0 ||
+        body.headline.length > 500
+      ) {
+        return jsonResponse(
+          { error: "headline must be a non-empty string of at most 500 characters" },
+          400
+        );
+      }
+      if (body.summary && (typeof body.summary !== "string" || body.summary.length > 2500)) {
+        return jsonResponse(
+          { error: "summary must be a string of at most 2500 characters" },
+          400
+        );
+      }
+      if (body.sources && (!Array.isArray(body.sources) || body.sources.length > 20)) {
+        return jsonResponse(
+          { error: "sources must be an array of at most 20 items" },
+          400
+        );
+      }
+
       const cluster: NewsCluster = {
-        headline: body.headline,
-        summary: body.summary || body.headline,
+        headline: body.headline.trim(),
+        summary: (body.summary || body.headline).trim(),
         sources: Array.isArray(body.sources)
           ? body.sources
           : [
@@ -669,12 +815,57 @@ export async function handleHeraldRequest(req: Request): Promise<Response> {
       return jsonResponse(result);
     }
 
-    // Scheduled Ingestion: mock / live multi-spectrum harvest
+    // 3. Scheduled Ingestion: process pending queue items or report status (BUG_0001)
+    if (supabase) {
+      const { data: pendingRows } = await supabase
+        .schema("valerie")
+        .from("news_ingest_queue")
+        .select("id, event_title, event_description, controversy_score, source_urls, metadata")
+        .eq("status", "pending")
+        .order("created_at", { ascending: true })
+        .limit(5);
+
+      if (pendingRows && pendingRows.length > 0) {
+        const batchResults: HeraldIngestResult[] = [];
+        for (const row of pendingRows) {
+          const cluster: NewsCluster = {
+            headline: row.event_title,
+            summary: row.event_description || row.event_title,
+            sources: Array.isArray(row.source_urls)
+              ? row.source_urls.map((u: string) => ({
+                  title: row.event_title,
+                  source: "IngestQueue",
+                  url: u,
+                  sentiment_score: 0.8,
+                }))
+              : [],
+            controversy_dispersion: Number(row.controversy_score || 0.7),
+            detected_locales: row.metadata?.detected_locales || ["US"],
+            scope_tier: row.metadata?.scope_tier || "NATIONAL",
+          };
+
+          const res = await processHeraldIngest(cluster, {
+            supabase,
+            openaiApiKey,
+            dryRun: body.dryRun === true,
+          });
+          batchResults.push(res);
+        }
+
+        return jsonResponse({
+          status: "processed_batch",
+          processed_count: batchResults.length,
+          results: batchResults,
+        });
+      }
+    }
+
     return jsonResponse({
-      status: "ready",
+      status: "idle",
       service: "valerie-herald-agent",
+      pending_count: 0,
       timestamp: new Date().toISOString(),
-      message: "Autonomous controversial headline agent ready. Send POST with headline cluster to process.",
+      message: "Autonomous controversial headline agent ready. Zero pending stories in queue.",
     });
   } catch (err: any) {
     return jsonResponse({ error: err.message || "Internal server error" }, 500);

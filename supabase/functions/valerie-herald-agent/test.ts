@@ -174,26 +174,28 @@ Deno.test("Semantic Deduplication: merges duplicate breaking stories when cosine
 
   const mockSupabase = {
     schema: () => ({
-      from: () => ({
-        select: () => ({
-          gte: () => ({
-            neq: () => ({
-              limit: () =>
-                Promise.resolve({
-                  data: [
-                    {
-                      id: "ingest-existing-1234",
-                      event_title: "Initial Congestion Pricing Bill Introduced",
-                      event_embedding: formatVectorForPg(mockEmbedding),
-                      source_urls: ["https://reuters.com/congestion-bill"],
-                      status: "auto_published",
-                    },
-                  ],
-                }),
+      from: () => {
+        const queryBuilder: any = {
+          select: () => queryBuilder,
+          gte: () => queryBuilder,
+          neq: () => queryBuilder,
+          order: () => queryBuilder,
+          eq: () => queryBuilder,
+          limit: () =>
+            Promise.resolve({
+              data: [
+                {
+                  id: "ingest-existing-1234",
+                  event_title: "Initial Congestion Pricing Bill Introduced",
+                  event_embedding: formatVectorForPg(mockEmbedding),
+                  source_urls: ["https://reuters.com/congestion-bill"],
+                  status: "auto_published",
+                },
+              ],
             }),
-          }),
-        }),
-      }),
+        };
+        return queryBuilder;
+      },
     }),
   };
 
@@ -218,10 +220,17 @@ Deno.test("SUBTASK-VAL-AXIS4-SPAWNER: Simulating 15 clustered FALSE_DICHOTOMY fl
   const mockSupabase = {
     schema: () => ({
       from: (tbl: string) => ({
-        select: (cols: string) => ({
-          eq: (field: string, val: any) => ({
+        select: (cols: string) => {
+          const handler: any = {
+            eq: (field: string, val: any) => {
+              if (tbl === "polls" && field === "axis_category") {
+                const existing = dbPolls.filter((p) => p.axis_category === "COMMUNITY_SPAWNED_AXIS");
+                return Promise.resolve({ data: existing });
+              }
+              return handler;
+            },
             maybeSingle: () => {
-              if (tbl === "polls" && field === "id") {
+              if (tbl === "polls") {
                 return Promise.resolve({
                   data: {
                     id: pollId,
@@ -232,23 +241,11 @@ Deno.test("SUBTASK-VAL-AXIS4-SPAWNER: Simulating 15 clustered FALSE_DICHOTOMY fl
                   },
                 });
               }
-              if (tbl === "polls" && field === "axis_category") {
-                const existing = dbPolls.find((p) => p.axis_category === "COMMUNITY_SPAWNED_AXIS");
-                return Promise.resolve({ data: existing || null });
-              }
               return Promise.resolve({ data: null });
             },
-            eq: () => ({
-              maybeSingle: () => Promise.resolve({ data: null }),
-            }),
-            or: () => ({
-              maybeSingle: () => {
-                const existing = dbPolls.find((p) => p.axis_category === "COMMUNITY_SPAWNED_AXIS");
-                return Promise.resolve({ data: existing || null });
-              },
-            }),
-          }),
-        }),
+          };
+          return handler;
+        },
         insert: (payload: any) => {
           dbPolls.push(payload);
           return {
