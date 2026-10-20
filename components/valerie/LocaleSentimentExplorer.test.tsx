@@ -85,17 +85,35 @@ describe("LocaleSentimentExplorer Component", () => {
   });
 
   it("triggers fetchPollResultsByLocale on granularity switch and handles K-anonymity fallback", async () => {
-    const spy = vi.spyOn(localeActions, "fetchPollResultsByLocale").mockResolvedValueOnce({
-      success: true,
-      granularity: "STATE",
-      fallbackApplied: true,
-      fallbackReason: "Local participation (<10 responses) is omitted by K-anonymity privacy rules. Rolled up to State / Province tier.",
-      data: mockRecords,
+    const spy = vi.spyOn(localeActions, "fetchPollResultsByLocale").mockImplementation(async (_id, gran = "NATIONAL") => {
+      const effectiveGran: localeActions.LocaleGranularity = gran ?? "NATIONAL";
+      if (effectiveGran === "LOCAL") {
+        return {
+          success: true,
+          granularity: "STATE",
+          fallbackApplied: true,
+          fallbackReason: "Local participation (<10 responses) is omitted by K-anonymity privacy rules. Rolled up to State / Province tier.",
+          data: mockRecords,
+        };
+      }
+      return {
+        success: true,
+        granularity: effectiveGran,
+        fallbackApplied: false,
+        data: [],
+      };
     });
 
     render(<LocaleSentimentExplorer pollId="poll-test-5" initialGranularity="NATIONAL" initialRecords={[]} />);
 
-    const localBtn = screen.getByText("Local (H3 / County)");
+    const localBtn = screen.getByText("Local (H3 / County)").closest("button")!;
+
+    // Wait for initial mount fetch to complete and button to be enabled
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalledWith("poll-test-5", "NATIONAL");
+      expect(localBtn).not.toBeDisabled();
+    });
+
     fireEvent.click(localBtn);
 
     await waitFor(() => {

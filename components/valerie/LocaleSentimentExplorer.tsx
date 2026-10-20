@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useMemo } from "react";
+import { useState, useEffect, useTransition, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   Globe,
@@ -38,17 +38,14 @@ export interface LocaleSentimentExplorerProps {
   className?: string;
 }
 
-const GRANULARITY_OPTIONS: { id: LocaleGranularity; label: string; icon: any }[] = [
-  { id: "LOCAL", label: "Local (H3 / County)", icon: MapPin },
-  { id: "STATE", label: "State / Province", icon: Building2 },
-  { id: "NATIONAL", label: "National", icon: Compass },
-  { id: "GLOBAL", label: "Global", icon: Globe },
+const GRANULARITY_OPTIONS = [
+  { id: "LOCAL" as const, label: "Local (H3 / County)", icon: MapPin },
+  { id: "STATE" as const, label: "State / Province", icon: Building2 },
+  { id: "NATIONAL" as const, label: "National", icon: Compass },
+  { id: "GLOBAL" as const, label: "Global", icon: Globe },
 ];
 
-function formatLikert(score: number | null): string {
-  if (score == null) return "—";
-  return score > 0 ? `+${score.toFixed(2)}` : score.toFixed(2);
-}
+const formatLikert = (s: number | null) => (s == null ? "—" : s > 0 ? `+${s.toFixed(2)}` : s.toFixed(2));
 
 function parseEcosystemRefs(raw: unknown): EcosystemRef[] {
   if (!raw || typeof raw !== "object") return [];
@@ -88,6 +85,22 @@ export function LocaleSentimentExplorer({
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [temporalMode, setTemporalMode] = useState<"side-by-side" | "shockwave" | "settled">("side-by-side");
+
+  // Automatically fetch initial records if none were supplied
+  useEffect(() => {
+    if (pollId && initialRecords.length === 0) {
+      startTransition(async () => {
+        const result = await fetchPollResultsByLocale(pollId, granularity);
+        if (result.success) {
+          setRecords(result.data);
+          if (result.fallbackApplied && result.fallbackReason) {
+            setFallbackMessage(result.fallbackReason);
+            setGranularity(result.granularity);
+          }
+        }
+      });
+    }
+  }, [pollId]);
 
   const ecosystemRefs = useMemo(
     () => parseEcosystemRefs(relatedEcosystemRefs),
@@ -240,31 +253,21 @@ export function LocaleSentimentExplorer({
 
         {/* Side-by-side metric comparison cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="rounded-lg border border-cyan-500/20 bg-slate-950/60 p-3 space-y-1">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="font-semibold text-cyan-400">Directly Impacted Locales</span>
-              <span className="font-mono text-slate-400">{divergenceMetrics.insideCount} verified</span>
+          {[
+            { title: "Directly Impacted Locales", color: "text-cyan-400", border: "border-cyan-500/20", count: divergenceMetrics.insideCount, salience: divergenceMetrics.insideSalience },
+            { title: "External Observers", color: "text-slate-300", border: "border-slate-800", count: divergenceMetrics.outsideCount, salience: divergenceMetrics.outsideSalience },
+          ].map((grp) => (
+            <div key={grp.title} className={cn("rounded-lg border bg-slate-950/60 p-3 space-y-1", grp.border)}>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className={cn("font-semibold", grp.color)}>{grp.title}</span>
+                <span className="font-mono text-slate-400">{grp.count} verified</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-xl font-bold text-slate-100">{formatLikert(grp.salience)}</span>
+                <span className="text-[10px] text-slate-400">Weighted Salience</span>
+              </div>
             </div>
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-xl font-bold text-slate-100">
-                {formatLikert(divergenceMetrics.insideSalience)}
-              </span>
-              <span className="text-[10px] text-slate-400">Weighted Salience</span>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 space-y-1">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="font-semibold text-slate-300">External Observers</span>
-              <span className="font-mono text-slate-400">{divergenceMetrics.outsideCount} verified</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="font-mono text-xl font-bold text-slate-100">
-                {formatLikert(divergenceMetrics.outsideSalience)}
-              </span>
-              <span className="text-[10px] text-slate-400">Weighted Salience</span>
-            </div>
-          </div>
+          ))}
         </div>
       </div>
 

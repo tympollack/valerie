@@ -93,6 +93,53 @@ export async function fetchPollResultsByLocale(
   try {
     const supabase = await createClient();
 
+    // Defense-in-depth: Reveal gate verification at Server Action boundary
+    if (typeof (supabase as any).auth?.getUser === "function") {
+      const { data: authData } = await (supabase as any).auth.getUser();
+      const currentUser = authData?.user;
+
+      if (currentUser) {
+        const [voteRes, flagRes] = await Promise.all([
+          (supabase as any)
+            .schema("valerie")
+            .from("poll_responses")
+            .select("locked_until")
+            .eq("poll_id", pollId)
+            .eq("user_id", currentUser.id)
+            .maybeSingle(),
+          (supabase as any)
+            .schema("valerie")
+            .from("poll_flags")
+            .select("locked_until")
+            .eq("poll_id", pollId)
+            .eq("user_id", currentUser.id)
+            .maybeSingle(),
+        ]);
+
+        const voteLock = voteRes?.data?.locked_until;
+        const flagLock = flagRes?.data?.locked_until;
+
+        if (!voteLock && !flagLock) {
+          return {
+            success: false,
+            granularity: upperGranularity,
+            data: [],
+            error: "NO_PARTICIPATION: You must vote or challenge before community results unlock.",
+          };
+        }
+
+        const effectiveLock = new Date(voteLock || flagLock).getTime();
+        if (Date.now() < effectiveLock) {
+          return {
+            success: false,
+            granularity: upperGranularity,
+            data: [],
+            error: `LOCK_WINDOW_ACTIVE: Results remain sealed until ${new Date(effectiveLock).toISOString()}`,
+          };
+        }
+      }
+    }
+
     // 1. Initial RPC query at requested granularity tier
     const { data: rawRows, error: rpcError } = await supabase
       .schema("valerie")
