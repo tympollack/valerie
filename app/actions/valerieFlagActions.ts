@@ -149,7 +149,13 @@ export async function resolveUserThetaVector(
   userRecord?: Record<string, unknown>,
   override?: number[]
 ): Promise<number[]> {
-  if (override && override.length === VECTOR_DIM) {
+  // Disallow caller-provided override unless running in a test harness
+  if (
+    process.env.NODE_ENV === "test" &&
+    override &&
+    override.length === VECTOR_DIM &&
+    override.every((n) => typeof n === "number" && Number.isFinite(n))
+  ) {
     return override;
   }
 
@@ -336,11 +342,15 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const localeBuckets = await resolveCoarseLocaleBuckets(userMetadata, userAppMeta);
 
   // 4. Resolve caller's latent belief vector and comment embedding
+  // Restrict thetaVectorOverride strictly to test environments to prevent client-side belief vector spoofing
+  const effectiveThetaOverride =
+    process.env.NODE_ENV === "test" ? thetaVectorOverride : undefined;
+
   const userTheta = await resolveUserThetaVector(
     supabase,
     user.id,
     user as unknown as Record<string, unknown>,
-    thetaVectorOverride
+    effectiveThetaOverride
   );
 
   let commentEmbedding: number[] | null = null;
@@ -390,10 +400,12 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const lockedUntil =
     data?.locked_until || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-  // 6. Asynchronously trigger evaluate_poll_flag_consensus (non-blocking)
-  evaluateFlagConsensusAsync(pollId).catch((err) => {
+  // 6. Trigger evaluate_poll_flag_consensus within request boundary to ensure serverless execution completes
+  try {
+    await evaluateFlagConsensusAsync(pollId);
+  } catch (err) {
     console.warn("[Project Valerie] Background consensus evaluation warning:", err);
-  });
+  }
 
   // Revalidate cache for this poll
   revalidatePath(`/polls/${pollId}`);

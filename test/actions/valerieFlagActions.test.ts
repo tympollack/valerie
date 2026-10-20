@@ -5,7 +5,7 @@ import {
   resolveCoarseLocaleBuckets,
   resolveUserThetaVector,
 } from "@/app/actions/valerieFlagActions";
-import { VECTOR_DIM } from "@/lib/ai/embedding";
+import { VECTOR_DIM, parseVectorSafely } from "@/lib/ai/embedding";
 
 // Mock next/headers
 const mockGetHeader = vi.fn();
@@ -220,5 +220,50 @@ describe("flagPollWithCommitGate Server Action", () => {
       normSq += val * val;
     }
     expect(Math.sqrt(normSq)).toBeCloseTo(1.0, 4);
+  });
+
+  it("strictly validates 1536-D and finite numbers in parseVectorSafely", () => {
+    // Correct dimensions & finite numbers
+    const valid = new Array(VECTOR_DIM).fill(0.025);
+    expect(parseVectorSafely(valid)).toEqual(valid);
+
+    // Wrong dimensions
+    expect(parseVectorSafely([1, 2, 3])).toBeNull();
+    expect(parseVectorSafely(new Array(1535).fill(0.1))).toBeNull();
+    expect(parseVectorSafely(new Array(1537).fill(0.1))).toBeNull();
+
+    // Non-finite values
+    const withNan = new Array(VECTOR_DIM).fill(0.1);
+    withNan[10] = NaN;
+    expect(parseVectorSafely(withNan)).toBeNull();
+
+    const withInf = new Array(VECTOR_DIM).fill(0.1);
+    withInf[5] = Infinity;
+    expect(parseVectorSafely(withInf)).toBeNull();
+
+    // Valid and invalid string vectors
+    expect(parseVectorSafely(JSON.stringify(valid))).toEqual(valid);
+    expect(parseVectorSafely(JSON.stringify([1, 2, 3]))).toBeNull();
+    expect(parseVectorSafely("not-json")).toBeNull();
+  });
+
+  it("disallows thetaVectorOverride outside test environments", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    try {
+      (process.env as any).NODE_ENV = "production";
+
+      const spoofedVector = new Array(VECTOR_DIM).fill(0.99);
+      const vector = await resolveUserThetaVector(
+        { schema: mockSchema },
+        "user-test-uuid",
+        { user_metadata: {} },
+        spoofedVector
+      );
+
+      // In production, the override must be ignored and fallback used
+      expect(vector).not.toEqual(spoofedVector);
+    } finally {
+      (process.env as any).NODE_ENV = originalEnv;
+    }
   });
 });

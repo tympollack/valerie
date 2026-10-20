@@ -49,10 +49,17 @@ export function formatVectorForPg(vec: number[]): string {
 
 /**
  * Parses vector from array, string, or returns null.
+ * Strictly verifies length === VECTOR_DIM (1536) and all elements are finite numbers.
  */
 export function parseVectorSafely(raw: unknown): number[] | null {
   if (Array.isArray(raw)) {
-    return raw.every((n) => typeof n === "number") ? raw : null;
+    if (
+      raw.length === VECTOR_DIM &&
+      raw.every((n) => typeof n === "number" && Number.isFinite(n))
+    ) {
+      return raw;
+    }
+    return null;
   }
   if (typeof raw === "string") {
     try {
@@ -61,7 +68,11 @@ export function parseVectorSafely(raw: unknown): number[] | null {
         ? trimmed
         : `[${trimmed}]`;
       const parsed = JSON.parse(cleaned);
-      if (Array.isArray(parsed) && parsed.length === VECTOR_DIM) {
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === VECTOR_DIM &&
+        parsed.every((n) => typeof n === "number" && Number.isFinite(n))
+      ) {
         return parsed;
       }
     } catch {

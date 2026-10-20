@@ -14,28 +14,24 @@ export interface PremiseRejectionBreakdownProps {
   className?: string
 }
 
-const DEFAULT_FLAG_BREAKDOWN: Record<string, { label: string; count: number; color: string; badge: string }> = {
+const FLAG_CONFIG: Record<string, { label: string; color: string; badge: string }> = {
   FALSE_DICHOTOMY: {
     label: "False Dichotomy / Missing Axis",
-    count: 22,
     color: "from-amber-500 to-amber-600",
     badge: "Missing Axis",
   },
   LOADED_FRAMING: {
     label: "Loaded / Manipulative Framing",
-    count: 14,
     color: "from-rose-500 to-rose-600",
     badge: "Framing",
   },
   DISPUTED_PREMISE: {
     label: "Disputed Factual Premise",
-    count: 12,
     color: "from-violet-500 to-violet-600",
     badge: "Factual Dispute",
   },
   LOCALE_MISMATCH: {
     label: "Geographic Scope Mismatch",
-    count: 6,
     color: "from-cyan-500 to-cyan-600",
     badge: "Geography",
   },
@@ -44,14 +40,13 @@ const DEFAULT_FLAG_BREAKDOWN: Record<string, { label: string; count: number; col
 export function PremiseRejectionBreakdown({
   userFlagReason,
   totalFlags,
-  totalVotes = 401,
+  totalVotes = 0,
   breakdown,
   className,
 }: PremiseRejectionBreakdownProps) {
-  // Aggregate counts
-  const items = Object.entries(DEFAULT_FLAG_BREAKDOWN).map(([reason, config]) => {
-    const customCount = breakdown?.[reason]
-    const count = customCount !== undefined ? customCount : config.count
+  // Aggregate telemetry counts with zero fake/mock data
+  const items = Object.entries(FLAG_CONFIG).map(([reason, config]) => {
+    const count = breakdown?.[reason] ?? 0;
     return {
       reason,
       label: config.label,
@@ -105,7 +100,9 @@ export function PremiseRejectionBreakdown({
         <div className="flex items-center gap-1.5 self-start sm:self-auto rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1 text-[11px]">
           <Scale className="h-3 w-3 text-amber-400" />
           <span className="text-slate-400">Bridging Consensus:</span>
-          <span className="font-mono font-bold text-amber-300">Active</span>
+          <span className="font-mono font-bold text-amber-300">
+            {computedTotalFlags > 0 ? "Active" : "Nominal"}
+          </span>
         </div>
       </div>
 
