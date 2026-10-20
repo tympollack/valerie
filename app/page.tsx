@@ -22,27 +22,31 @@ export default async function Page() {
       trustState: "active" as const,
     }
   }
-  let pollId = "demo-poll-01"
-  let questionText =
-    "The municipal council should convert Main Street into a [[pedestrian-only zone]] to boost [[community sentiment]] and local commerce."
+  let activePoll: {
+    id: string
+    question_text: string
+    axis_category?: string | null
+    detected_locales?: string[] | null
+    target_locale_code?: string | null
+    related_ecosystem_refs?: Record<string, unknown> | null
+  } | null = null
 
   try {
     const supabase = await createClient()
     const { data: poll } = await supabase
       .schema("valerie")
       .from("polls")
-      .select("id, question_text")
+      .select("id, question_text, axis_category, detected_locales, target_locale_code, related_ecosystem_refs")
       .eq("is_active", true)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle()
 
     if (poll) {
-      pollId = poll.id
-      questionText = poll.question_text
+      activePoll = poll
     }
   } catch {
-    // Graceful fallback to default demo poll
+    activePoll = null
   }
 
   return (
@@ -101,12 +105,37 @@ export default async function Page() {
             </div>
           </div>
 
-          {/* Primary Bivariate Poll Card */}
-          <BivariatePollCard
-            pollId={pollId}
-            questionText={questionText}
-            category="Civic Transit & Urban Space"
-          />
+          {/* Primary Bivariate Poll Card or Empty State */}
+          {activePoll ? (
+            <BivariatePollCard
+              pollId={activePoll.id}
+              questionText={activePoll.question_text}
+              category={activePoll.axis_category || "Civic Deliberation & Policy"}
+              relatedEcosystemRefs={activePoll.related_ecosystem_refs}
+              detectedLocales={activePoll.detected_locales ?? undefined}
+              targetLocaleCode={activePoll.target_locale_code ?? undefined}
+            />
+          ) : (
+            <div className="rounded-2xl border border-slate-800/80 bg-slate-950/80 p-8 text-center backdrop-blur-xl space-y-4 shadow-[0_0_25px_rgba(6,182,212,0.05)]">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-500/30 bg-cyan-950/50 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]">
+                <Compass className="h-6 w-6" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-base font-bold text-slate-100">
+                  No Active Civic Polls
+                </h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                  There are currently no active civic polls open for deliberation. New propositions are dynamically published by the autonomous news pipeline as controversial civic topics break.
+                </p>
+              </div>
+              <div className="pt-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-mono text-cyan-400/80">
+                  <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  Awaiting autonomous herald ingest
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
