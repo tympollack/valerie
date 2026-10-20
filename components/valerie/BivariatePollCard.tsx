@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ValerieTooltip } from "@/components/valerie/ValerieTooltip"
 import { RevealGate, type BivariateVote } from "@/components/valerie/RevealGate"
+import type { LocaleGranularity, LocaleSentimentRecord } from "@/app/actions/valerieLocaleActions"
 import { PremiseChallengeDrawer } from "@/components/valerie/PremiseChallengeDrawer"
 import { castVote, submitVote } from "@/app/actions/vote"
 import { flagPollWithCommitGate, type FlagReason } from "@/app/actions/valerieFlagActions"
@@ -38,6 +39,9 @@ export interface BivariatePollCardProps {
   onVoteSuccess?: (vote: BivariateVote) => void
   onFlagSuccess?: (challenge: { flagReason: string; suggestedAxisComment?: string }) => void
   className?: string
+  relatedEcosystemRefs?: Record<string, unknown> | null
+  initialLocaleResults?: LocaleSentimentRecord[]
+  initialGranularity?: LocaleGranularity
 }
 
 const LIKERT_STEPS = [
@@ -168,6 +172,9 @@ export function BivariatePollCard({
   onVoteSuccess,
   onFlagSuccess,
   className,
+  relatedEcosystemRefs,
+  initialLocaleResults,
+  initialGranularity,
 }: BivariatePollCardProps) {
   // --- Form state
   const [likertScore, setLikertScore] = useState<number>(0)
@@ -697,6 +704,10 @@ export function BivariatePollCard({
           flagReason={userChallenge?.flagReason}
           suggestedAxisComment={userChallenge?.suggestedAxisComment}
           pollQuestion={questionText}
+          pollId={pollId}
+          relatedEcosystemRefs={relatedEcosystemRefs}
+          initialLocaleResults={initialLocaleResults}
+          initialGranularity={initialGranularity}
         />
       )}
     </div>
