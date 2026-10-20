@@ -10,20 +10,20 @@
 
 import type { Env, NewsCluster, HeraldIngestResult, CronRunSummary } from "./types";
 
-const SENSITIVE_PARAM_REGEX = /(token|password|authorization|cookie|service_role_key|api_key|secret|key)=([^&\s]+)/gi;
+const SENSITIVE_PARAM_REGEX = /([a-z0-9_-]*(?:token|password|authorization|cookie|service_role_key|api_key|secret|key))\s*[:=]\s*([^\s,"'&]+)/gi;
 const BEARER_TOKEN_REGEX = /(Bearer\s+)[A-Za-z0-9_\-.]+/gi;
 const JWT_TOKEN_REGEX = /eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]+/g;
 
 /**
- * Redacts tokens, passwords, bearer tokens, and JWTs from logs and error strings.
+ * Redacts tokens, passwords, bearer tokens, headers, and JWTs from logs and error strings.
  */
 export function sanitizeLogContent(val: unknown): string {
   if (val === null || val === undefined) return "";
   const str = typeof val === "string" ? val : JSON.stringify(val);
   return str
-    .replace(SENSITIVE_PARAM_REGEX, "$1=[REDACTED]")
     .replace(BEARER_TOKEN_REGEX, "$1[REDACTED]")
-    .replace(JWT_TOKEN_REGEX, "[REDACTED_JWT]");
+    .replace(JWT_TOKEN_REGEX, "[REDACTED_JWT]")
+    .replace(SENSITIVE_PARAM_REGEX, "$1: [REDACTED]");
 }
 
 /**

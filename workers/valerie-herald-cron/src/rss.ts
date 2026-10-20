@@ -14,6 +14,31 @@ export const DEFAULT_RSS_FEEDS = [
   "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",
 ];
 
+const POSITIVE_MARKERS = [
+  "approve", "success", "advance", "support", "benefit", "boost", "praise", "agreement",
+  "win", "protect", "relief", "gain", "strengthen", "progress", "pass", "triumph", "clean", "reform"
+];
+
+const NEGATIVE_MARKERS = [
+  "crisis", "fail", "protest", "strike", "criticize", "block", "oppose", "threat", "danger",
+  "harm", "cut", "loss", "decline", "condemn", "scandal", "lawsuit", "warn", "violate", "dispute"
+];
+
+/**
+ * Estimates civic/policy sentiment score from title and description on [-1.0, 1.0] scale.
+ */
+export function estimateTextSentiment(text: string): number {
+  const lower = text.toLowerCase();
+  let score = 0;
+  for (const pos of POSITIVE_MARKERS) {
+    if (lower.includes(pos)) score += 0.3;
+  }
+  for (const neg of NEGATIVE_MARKERS) {
+    if (lower.includes(neg)) score -= 0.3;
+  }
+  return Math.max(-1.0, Math.min(1.0, parseFloat(score.toFixed(2))));
+}
+
 /**
  * Extracts tag content from an XML snippet without requiring external DOM libraries.
  */
@@ -51,11 +76,13 @@ export function parseRssXml(xml: string, defaultSource: string): NewsArticle[] {
     const pubDate = extractTagContent(itemXml, "pubDate") || extractTagContent(itemXml, "published");
 
     if (title && url) {
+      const fullText = `${title}. ${description}`;
       articles.push({
         title,
         source: defaultSource,
         url,
         snippet: description.slice(0, 300),
+        sentiment_score: estimateTextSentiment(fullText),
         published_at: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
       });
     }

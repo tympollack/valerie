@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import { normalizeGdeltTone, parseGdeltDate } from "../../workers/valerie-herald-cron/src/gdelt";
-import { parseRssXml } from "../../workers/valerie-herald-cron/src/rss";
+import { parseRssXml, estimateTextSentiment } from "../../workers/valerie-herald-cron/src/rss";
 import {
   calculateControversyDispersion,
   detectLocalesAndScope,
@@ -33,22 +33,57 @@ describe("Valerie Herald Cron Worker", () => {
   });
 
   describe("RSS Parser", () => {
-    it("parses RSS 2.0 XML items cleanly", () => {
+    it("parses RSS 2.0 XML items cleanly and computes text sentiment", () => {
       const xml = `
         <rss version="2.0">
           <channel>
             <item>
-              <title>Supreme Court Review</title>
+              <title>Supreme Court Approves Landmark Clean Energy Reform</title>
               <link>https://reuters.com/scotus-case</link>
-              <description>Oral arguments underway.</description>
+              <description>Support and praise for historic environmental progress.</description>
             </item>
           </channel>
         </rss>
       `;
       const articles = parseRssXml(xml, "reuters.com");
       expect(articles).toHaveLength(1);
-      expect(articles[0].title).toBe("Supreme Court Review");
+      expect(articles[0].title).toBe("Supreme Court Approves Landmark Clean Energy Reform");
       expect(articles[0].source).toBe("reuters.com");
+      expect(articles[0].sentiment_score).toBeGreaterThan(0);
+    });
+
+    it("enables controversy dispersion on opposing RSS coverage", () => {
+      const proXml = `
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Council Approves Transit Reform Package</title>
+              <link>https://source-a.com/transit</link>
+              <description>Major success and victory for public transit advocates.</description>
+            </item>
+          </channel>
+        </rss>
+      `;
+      const conXml = `
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>Transit Reform Protests Erupt Over Budget Cuts</title>
+              <link>https://source-b.com/transit</link>
+              <description>Severe crisis as critics condemn lawsuit threat and budget deficit.</description>
+            </item>
+          </channel>
+        </rss>
+      `;
+
+      const artA = parseRssXml(proXml, "source-a.com")[0];
+      const artB = parseRssXml(conXml, "source-b.com")[0];
+
+      expect(artA.sentiment_score).toBeGreaterThan(0.3);
+      expect(artB.sentiment_score).toBeLessThan(-0.3);
+
+      const dispersion = calculateControversyDispersion([artA, artB]);
+      expect(dispersion).toBeGreaterThanOrEqual(0.65);
     });
   });
 
@@ -96,11 +131,12 @@ describe("Valerie Herald Cron Worker", () => {
   });
 
   describe("Security & Redaction", () => {
-    it("redacts sensitive auth tokens and keys from error messages", () => {
-      const msg = "Service failed: Authorization: Bearer secret_token_1234567890 with key=super_secret";
+    it("redacts sensitive auth tokens, keys, and header values from error messages", () => {
+      const msg = "Service failed: Authorization: Bearer secret_token_1234567890 with key=super_secret and x-cron-secret: upstream_secret_xyz";
       const sanitized = sanitizeLogContent(msg);
       expect(sanitized).not.toContain("secret_token_1234567890");
       expect(sanitized).not.toContain("super_secret");
+      expect(sanitized).not.toContain("upstream_secret_xyz");
       expect(sanitized).toContain("[REDACTED]");
     });
 
