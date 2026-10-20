@@ -21,6 +21,7 @@ import {
   parseVectorSafely,
   VECTOR_DIM,
 } from "@/lib/ai/embedding";
+import { resolveVoterLocale, type ResolvedVoterLocale } from "@/lib/geo/resolveVoterLocale";
 import { revalidatePath } from "next/cache";
 import { cookies, headers } from "next/headers";
 
@@ -72,71 +73,8 @@ export async function resolveCoarseLocaleBuckets(
   userMeta?: Record<string, unknown>,
   appMeta?: Record<string, unknown>
 ): Promise<CoarseLocaleBuckets> {
-  let country_iso: string | null = null;
-  let admin1_code: string | null = null;
-  let admin2_code: string | null = null;
-  let h3_res7: string | null = null;
-
-  try {
-    const headerStore = await headers();
-    country_iso =
-      headerStore.get("x-country-iso") ||
-      headerStore.get("cf-ipcountry") ||
-      headerStore.get("x-vercel-ip-country") ||
-      headerStore.get("x-geo-country") ||
-      null;
-
-    admin1_code =
-      headerStore.get("x-admin1-code") ||
-      headerStore.get("x-vercel-ip-country-region") ||
-      headerStore.get("cf-region-code") ||
-      headerStore.get("x-geo-region") ||
-      null;
-
-    admin2_code =
-      headerStore.get("x-admin2-code") ||
-      headerStore.get("x-geo-admin2") ||
-      headerStore.get("x-geo-county") ||
-      null;
-
-    h3_res7 =
-      headerStore.get("x-h3-res7") ||
-      headerStore.get("x-geo-h3-res7") ||
-      headerStore.get("x-h3-index") ||
-      null;
-  } catch {
-    // Header resolution fallback for isolated test environments
-  }
-
-  // Profile metadata fallbacks
-  if (!country_iso && userMeta) {
-    country_iso = (userMeta.country_iso as string) || (appMeta?.country_iso as string) || null;
-  }
-  if (!admin1_code && userMeta) {
-    admin1_code = (userMeta.admin1_code as string) || (appMeta?.admin1_code as string) || null;
-  }
-  if (!admin2_code && userMeta) {
-    admin2_code = (userMeta.admin2_code as string) || (appMeta?.admin2_code as string) || null;
-  }
-  if (!h3_res7 && userMeta) {
-    h3_res7 =
-      (userMeta.h3_res7 as string) ||
-      (userMeta.h3_hex_index as string) ||
-      (appMeta?.h3_res7 as string) ||
-      null;
-  }
-
-  // Clean country ISO to 2 uppercase chars
-  if (country_iso) {
-    country_iso = country_iso.trim().toUpperCase().slice(0, 2);
-  }
-
-  return {
-    country_iso,
-    admin1_code: admin1_code?.trim() || null,
-    admin2_code: admin2_code?.trim() || null,
-    h3_res7: h3_res7?.trim() || null,
-  };
+  const profile = { user_metadata: userMeta, app_metadata: appMeta };
+  return resolveVoterLocale(undefined, profile);
 }
 
 // =============================================================================
@@ -339,7 +277,7 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   }
 
   // 3. Resolve coarse locale buckets without persisting raw coordinates
-  const localeBuckets = await resolveCoarseLocaleBuckets(userMetadata, userAppMeta);
+  const localeBuckets = await resolveVoterLocale(undefined, user);
 
   // 4. Resolve caller's latent belief vector and comment embedding
   // Restrict thetaVectorOverride strictly to test environments to prevent client-side belief vector spoofing
