@@ -75,5 +75,7 @@ describe("RevealGate Component", () => {
     expect(screen.getByText(/False Dichotomy \/ Missing Axis/i)).toBeInTheDocument();
     expect(screen.getByText(/★ YOUR CHALLENGE/i)).toBeInTheDocument();
     expect(screen.getByText(/Consensus Index:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Multi-Scale Locale Sentiment Rollup/i)).toBeInTheDocument();
+    expect(screen.getByText(/Blast-Radius Proximity Divergence/i)).toBeInTheDocument();
   });
 });

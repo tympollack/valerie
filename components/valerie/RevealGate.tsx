@@ -20,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ValerieTooltip } from "@/components/valerie/ValerieTooltip";
 import { PremiseRejectionBreakdown } from "@/components/valerie/PremiseRejectionBreakdown";
+import { LocaleSentimentExplorer } from "@/components/valerie/LocaleSentimentExplorer";
+import type { LocaleGranularity, LocaleSentimentRecord } from "@/app/actions/valerieLocaleActions";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -53,6 +55,10 @@ export interface RevealGateProps {
     totalFlags: number;
     byReason: Record<string, number>;
   };
+  pollId?: string;
+  relatedEcosystemRefs?: Record<string, unknown> | null;
+  initialLocaleResults?: LocaleSentimentRecord[];
+  initialGranularity?: LocaleGranularity;
 }
 
 const FLAG_REASON_DETAILS: Record<string, { label: string; desc: string; color: string }> = {
@@ -146,6 +152,10 @@ export function RevealGate({
   className,
   allowSimulation = false,
   flagStats,
+  pollId,
+  relatedEcosystemRefs,
+  initialLocaleResults,
+  initialGranularity,
 }: RevealGateProps) {
   const effectiveFlagReason = flagReason || userChallenge?.flagReason;
   const effectiveComment = suggestedAxisComment || userChallenge?.suggestedAxisComment;
@@ -651,6 +661,14 @@ export function RevealGate({
               totalVotes={totalVotesCount}
               totalFlags={flagStats?.totalFlags}
               breakdown={flagStats?.byReason}
+            />
+
+            {/* ── Multi-Scale Locale Sentiment Rollup & Blast-Radius Divergence ── */}
+            <LocaleSentimentExplorer
+              pollId={pollId}
+              initialGranularity={initialGranularity}
+              initialRecords={initialLocaleResults}
+              relatedEcosystemRefs={relatedEcosystemRefs}
             />
 
             {/* Footer Insights Note */}
