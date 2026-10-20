@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Compass,
   ExternalLink,
+  Flag,
 } from "lucide-react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -21,7 +22,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ValerieTooltip } from "@/components/valerie/ValerieTooltip"
 import { RevealGate, type BivariateVote } from "@/components/valerie/RevealGate"
+import { PremiseChallengeDrawer } from "@/components/valerie/PremiseChallengeDrawer"
 import { castVote, submitVote } from "@/app/actions/vote"
+import { flagPollWithCommitGate, type FlagReason } from "@/app/actions/valerieFlagActions"
 import { cn } from "@/lib/utils"
 
 // =============================================================================
@@ -33,60 +36,16 @@ export interface BivariatePollCardProps {
   questionText?: string
   category?: string
   onVoteSuccess?: (vote: BivariateVote) => void
+  onFlagSuccess?: (challenge: { flagReason: string; suggestedAxisComment?: string }) => void
   className?: string
 }
 
 const LIKERT_STEPS = [
-  {
-    value: -2,
-    label: "Strongly Disagree",
-    short: "SD",
-    activeColor:
-      "bg-rose-500 text-white border-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.4)]",
-    dotColor: "bg-rose-500",
-    textColor: "text-rose-400",
-    gradient: "from-rose-500 to-rose-600",
-  },
-  {
-    value: -1,
-    label: "Disagree",
-    short: "D",
-    activeColor:
-      "bg-amber-500 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.4)]",
-    dotColor: "bg-amber-500",
-    textColor: "text-amber-400",
-    gradient: "from-amber-500 to-amber-600",
-  },
-  {
-    value: 0,
-    label: "Neutral / Undecided",
-    short: "N",
-    activeColor:
-      "bg-slate-600 text-white border-slate-500 shadow-[0_0_15px_rgba(100,116,139,0.4)]",
-    dotColor: "bg-slate-400",
-    textColor: "text-slate-300",
-    gradient: "from-slate-500 to-slate-600",
-  },
-  {
-    value: 1,
-    label: "Agree",
-    short: "A",
-    activeColor:
-      "bg-emerald-500 text-white border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.4)]",
-    dotColor: "bg-emerald-500",
-    textColor: "text-emerald-400",
-    gradient: "from-emerald-500 to-emerald-600",
-  },
-  {
-    value: 2,
-    label: "Strongly Agree",
-    short: "SA",
-    activeColor:
-      "bg-cyan-500 text-slate-950 border-cyan-300 shadow-[0_0_20px_rgba(6,182,212,0.6)] font-extrabold",
-    dotColor: "bg-cyan-400",
-    textColor: "text-cyan-400",
-    gradient: "from-cyan-400 to-cyan-500",
-  },
+  { value: -2, label: "Strongly Disagree", short: "SD", activeColor: "bg-rose-500 text-white border-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.4)]", dotColor: "bg-rose-500", textColor: "text-rose-400", gradient: "from-rose-500 to-rose-600" },
+  { value: -1, label: "Disagree", short: "D", activeColor: "bg-amber-500 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.4)]", dotColor: "bg-amber-500", textColor: "text-amber-400", gradient: "from-amber-500 to-amber-600" },
+  { value: 0, label: "Neutral / Undecided", short: "N", activeColor: "bg-slate-600 text-white border-slate-500 shadow-[0_0_15px_rgba(100,116,139,0.4)]", dotColor: "bg-slate-400", textColor: "text-slate-300", gradient: "from-slate-500 to-slate-600" },
+  { value: 1, label: "Agree", short: "A", activeColor: "bg-emerald-500 text-white border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.4)]", dotColor: "bg-emerald-500", textColor: "text-emerald-400", gradient: "from-emerald-500 to-emerald-600" },
+  { value: 2, label: "Strongly Agree", short: "SA", activeColor: "bg-cyan-500 text-slate-950 border-cyan-300 shadow-[0_0_20px_rgba(6,182,212,0.6)] font-extrabold", dotColor: "bg-cyan-400", textColor: "text-cyan-400", gradient: "from-cyan-400 to-cyan-500" },
 ]
 
 const KNOWN_GLOSSARY_TERMS = [
@@ -207,6 +166,7 @@ export function BivariatePollCard({
   questionText = "The municipal council should convert Main Street into a [[pedestrian-only zone]] to boost community sentiment and local commerce.",
   category = "Urban Planning & Civic Infrastructure",
   onVoteSuccess,
+  onFlagSuccess,
   className,
 }: BivariatePollCardProps) {
   // --- Form state
@@ -220,6 +180,12 @@ export function BivariatePollCard({
   const [lockedUntil, setLockedUntil] = useState<string | undefined>(undefined)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false)
+  const [userChallenge, setUserChallenge] = useState<{
+    flagReason: string
+    suggestedAxisComment?: string
+  } | null>(null)
+  const [isFlagPending, startFlagTransition] = useTransition()
   const [returnUrl, setReturnUrl] = useState("")
 
   useEffect(() => {
@@ -270,6 +236,49 @@ export function BivariatePollCard({
       }
     })
   }, [pollId, likertScore, confidenceScore, comment, onVoteSuccess])
+
+  // Premise Challenge Handler
+  const handleChallengeSubmit = useCallback(
+    (reason: FlagReason, missingAxisText?: string) => {
+      setErrorMsg(null)
+
+      startFlagTransition(async () => {
+        try {
+          const result = await flagPollWithCommitGate({
+            pollId,
+            flagReason: reason,
+            suggestedAxisComment: missingAxisText,
+          })
+
+          if (result.success) {
+            const unlockTime =
+              result.lockedUntil ||
+              new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+            setLockedUntil(unlockTime)
+            setUserChallenge({
+              flagReason: reason,
+              suggestedAxisComment: missingAxisText,
+            })
+            setIsSubmitted(true)
+            setIsDrawerOpen(false)
+            onFlagSuccess?.({
+              flagReason: reason,
+              suggestedAxisComment: missingAxisText,
+            })
+          } else {
+            setErrorMsg(result.error || "Failed to record premise challenge.")
+          }
+        } catch (err) {
+          const errorText =
+            err instanceof Error
+              ? err.message
+              : "Failed to record premise challenge. Please try again."
+          setErrorMsg(errorText)
+        }
+      })
+    },
+    [pollId, onFlagSuccess]
+  )
 
   return (
     <div className={cn("mx-auto w-full max-w-2xl space-y-6", className)}>
@@ -619,29 +628,58 @@ export function BivariatePollCard({
             </Alert>
           )}
 
-          {/* 6. Commit & Seal Vote Button */}
-          <Button
-            type="button"
-            size="lg"
-            onClick={handleSubmit}
-            disabled={isPending}
-            className={cn(
-              "h-13 w-full cursor-pointer rounded-xl text-sm font-bold tracking-wide shadow-lg transition-all duration-200",
-              "bg-gradient-to-r from-cyan-500 via-teal-400 to-cyan-500 text-slate-950 hover:opacity-95 hover:shadow-[0_0_25px_rgba(6,182,212,0.4)]"
-            )}
-          >
-            {isPending ? (
-              <span className="flex items-center gap-2">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
-                Sealing Cryptographic Vote...
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <Lock className="h-4 w-4" />
-                Commit &amp; Seal Bivariate Vote
-              </span>
-            )}
-          </Button>
+          {/* Premise Challenge Drawer */}
+          <PremiseChallengeDrawer
+            isOpen={isDrawerOpen}
+            onClose={() => setIsDrawerOpen(false)}
+            onSubmit={handleChallengeSubmit}
+            isSubmitting={isFlagPending}
+            error={errorMsg}
+          />
+
+          {/* 6. Primary Action Buttons: Vote Commit CTA & Premise Challenge Button */}
+          <div className="flex flex-col sm:flex-row items-center gap-3">
+            <Button
+              type="button"
+              size="lg"
+              onClick={handleSubmit}
+              disabled={isPending || isFlagPending}
+              className={cn(
+                "h-13 w-full sm:flex-1 cursor-pointer rounded-xl text-sm font-bold tracking-wide shadow-lg transition-all duration-200",
+                "bg-gradient-to-r from-cyan-500 via-teal-400 to-cyan-500 text-slate-950 hover:opacity-95 hover:shadow-[0_0_25px_rgba(6,182,212,0.4)]"
+              )}
+            >
+              {isPending ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
+                  Sealing Cryptographic Vote...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <Lock className="h-4 w-4" />
+                  Commit &amp; Seal Bivariate Vote
+                </span>
+              )}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                setIsDrawerOpen((prev) => !prev)
+                setErrorMsg(null)
+              }}
+              disabled={isPending || isFlagPending}
+              className={cn(
+                "h-13 w-full sm:w-auto cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 px-4 text-xs font-semibold text-slate-300 transition-all duration-200 hover:border-amber-500/40 hover:bg-slate-900 hover:text-amber-300",
+                isDrawerOpen && "border-amber-500/50 bg-amber-950/30 text-amber-300"
+              )}
+            >
+              <Flag className="h-4 w-4 text-amber-400" />
+              <span>Challenge Premise / Framing</span>
+            </Button>
+          </div>
 
           <p className="text-center text-[11px] text-slate-400">
             Immutable cryptographic commit. Zero pre-vote herd bias. Community
@@ -653,7 +691,11 @@ export function BivariatePollCard({
         <RevealGate
           isSubmitted={true}
           lockedUntil={lockedUntil}
-          userVote={{ likertScore, confidenceScore, comment }}
+          userVote={userChallenge ? undefined : { likertScore, confidenceScore, comment }}
+          userChallenge={userChallenge ?? undefined}
+          isPremiseChallenge={Boolean(userChallenge)}
+          flagReason={userChallenge?.flagReason}
+          suggestedAxisComment={userChallenge?.suggestedAxisComment}
           pollQuestion={questionText}
         />
       )}
