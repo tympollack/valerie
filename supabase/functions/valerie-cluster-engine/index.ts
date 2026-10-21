@@ -535,7 +535,17 @@ export async function handleClusterRequest(req: Request): Promise<Response> {
       return jsonResponse(axis4Result);
     }
 
+    if (!isServiceKeyAuthorized && !isCronAuthorized && !isAdminAuthorized && !callerId) {
+      return jsonResponse(
+        { error: "Unauthorized: Valid user JWT, cron secret, or service role key required." },
+        401
+      );
+    }
+
     const payload: ClusterEngineRequest = body;
+    if (!isServiceKeyAuthorized && !isCronAuthorized && !isAdminAuthorized && callerId) {
+      payload.user_id = callerId;
+    }
 
     if (
       typeof payload.likert_score !== "number" ||
