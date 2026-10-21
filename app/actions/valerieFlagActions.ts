@@ -348,6 +348,22 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const lockedUntil =
     data?.locked_until || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
+  // 5b. Persist verified belief vector snapshot via service role client (SEC_0001)
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (data?.id && serviceRoleKey && supabaseUrl) {
+    try {
+      const adminClient = createSupabaseClient(supabaseUrl, serviceRoleKey);
+      await (adminClient as any)
+        .schema("valerie")
+        .from("poll_flags")
+        .update({ user_theta_snapshot: formatVectorForPg(userTheta) })
+        .eq("id", data.id);
+    } catch (adminErr) {
+      console.warn("[Project Valerie] Non-blocking snapshot backfill warning:", adminErr);
+    }
+  }
+
   // 6. Trigger evaluate_poll_flag_consensus within request boundary to ensure serverless execution completes
   try {
     await evaluateFlagConsensusAsync(pollId);
