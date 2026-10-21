@@ -506,8 +506,9 @@ export async function handleClusterRequest(req: Request): Promise<Response> {
       const { data: userData } = await supabaseAdmin.auth.getUser(token);
       if (userData?.user) {
         callerId = userData.user.id;
-        const role = userData.user.app_metadata?.role || userData.user.user_metadata?.role;
-        const isAdmin = userData.user.app_metadata?.is_admin === true || userData.user.user_metadata?.is_admin === true;
+        // Strictly inspect app_metadata only, never user_metadata which is client-writable
+        const role = userData.user.app_metadata?.role;
+        const isAdmin = userData.user.app_metadata?.is_admin === true;
         if (role === "admin" || role === "service_role" || isAdmin) {
           isAdminAuthorized = true;
         }

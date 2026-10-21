@@ -48,12 +48,9 @@ function parseEcosystemRefs(raw: unknown): EcosystemRef[] {
       if (typeof item === "string" && item.trim()) {
         const id = item.trim();
         const isPw = source === "patchwork";
-        refs.push({
-          source,
-          id,
-          label: isPw ? `PatchWork #${id}` : `Speak for the Dead #${id}`,
-          url: isPw ? `https://patchwork.sunshade.icu/records/${id}` : `https://sftd.sunshade.icu/records/${id}`,
-        });
+        const tag = isPw ? "PatchWork" : "Speak for the Dead";
+        const host = isPw ? "patchwork.sunshade.icu" : "sftd.sunshade.icu";
+        refs.push({ source, id, label: `${tag} #${id}`, url: `https://${host}/records/${id}` });
       }
     }
   };
@@ -79,11 +76,11 @@ export function LocaleSentimentExplorer({
 
   // Automatically fetch initial records if none were supplied, and reset when pollId changes (BUG_0003)
   useEffect(() => {
+    const requestId = ++activeRequestRef.current;
     setRecords(initialRecords);
     setFallbackMessage(null);
 
     if (pollId && initialRecords.length === 0) {
-      const requestId = ++activeRequestRef.current;
       startTransition(async () => {
         const result = await fetchPollResultsByLocale(pollId, granularity);
         if (activeRequestRef.current !== requestId) return; // Discard stale response
@@ -96,6 +93,10 @@ export function LocaleSentimentExplorer({
         }
       });
     }
+
+    return () => {
+      activeRequestRef.current++;
+    };
   }, [pollId]);
 
   const ecosystemRefs = useMemo(

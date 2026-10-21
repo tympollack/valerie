@@ -70,7 +70,7 @@ export interface DecomposedAxis {
 export interface HeraldIngestResult {
   ingest_id: string;
   headline: string;
-  status: "auto_published" | "merged_duplicate" | "cynic_rejected" | "skipped_low_controversy" | "failed";
+  status: "auto_published" | "merged_duplicate" | "cynic_rejected" | "skipped_low_controversy" | "failed" | "already_claimed";
   controversy_dispersion: number;
   duplicate_of_id?: string;
   published_poll_ids?: string[];
@@ -581,21 +581,36 @@ export async function processHeraldIngest(
     };
   }
 
-  // Stage Ingest Queue Record as 'processing' (ensures atomicity and traceability)
+  // Stage Ingest Queue Record as 'processing' (ensures atomicity, vector persistence, and traceability)
   if (supabase && !options?.dryRun) {
     if (options?.existingIngestId) {
-      await supabase
+      // Atomically claim pending row to prevent concurrent workers from duplicating publications (BUG_0002)
+      // Also persist the event embedding so queued stories participate in deduplication (ANALYSIS_0002)
+      const { data: claimedRows, error: claimErr } = await supabase
         .schema("valerie")
         .from("news_ingest_queue")
         .update({
           status: "processing",
+          event_embedding: formatVectorForPg(eventEmbedding),
           metadata: {
             scope_tier: cluster.scope_tier,
             detected_locales: cluster.detected_locales,
             started_at: new Date().toISOString(),
           },
         })
-        .eq("id", ingestId);
+        .eq("id", ingestId)
+        .eq("status", "pending")
+        .select("id");
+
+      if (claimErr || !claimedRows || claimedRows.length === 0) {
+        return {
+          ingest_id: ingestId,
+          headline: cluster.headline,
+          status: "already_claimed",
+          controversy_dispersion: cluster.controversy_dispersion,
+          reason: `Queue record ${ingestId} was already claimed by another worker or is no longer pending.`,
+        };
+      }
     } else {
       await supabase
         .schema("valerie")
@@ -796,8 +811,9 @@ export async function handleHeraldRequest(req: Request): Promise<Response> {
       const user = userData?.user;
       if (user) {
         // Enforce administrative authorization to prevent unauthorized poll publication
-        const role = user.app_metadata?.role || user.user_metadata?.role;
-        const isAdmin = user.app_metadata?.is_admin === true || user.user_metadata?.is_admin === true;
+        // Strictly inspect app_metadata only, never user_metadata which is client-writable (SEC_0001)
+        const role = user.app_metadata?.role;
+        const isAdmin = user.app_metadata?.is_admin === true;
         if (role === "admin" || role === "service_role" || isAdmin) {
           isUserAuthorized = true;
         }
@@ -899,7 +915,9 @@ export async function handleHeraldRequest(req: Request): Promise<Response> {
             dryRun: body.dryRun === true,
             existingIngestId: row.id,
           });
-          batchResults.push(res);
+          if (res.status !== "already_claimed") {
+            batchResults.push(res);
+          }
         }
 
         return jsonResponse({

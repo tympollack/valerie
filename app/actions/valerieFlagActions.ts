@@ -284,16 +284,26 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const effectiveThetaOverride =
     process.env.NODE_ENV === "test" ? thetaVectorOverride : undefined;
 
-  const userTheta = await resolveUserThetaVector(
-    supabase,
-    user.id,
-    user as unknown as Record<string, unknown>,
-    effectiveThetaOverride
-  );
-
+  let userTheta: number[];
   let commentEmbedding: number[] | null = null;
-  if (cleanComment) {
-    commentEmbedding = await generateEmbedding(cleanComment);
+
+  try {
+    userTheta = await resolveUserThetaVector(
+      supabase,
+      user.id,
+      user as unknown as Record<string, unknown>,
+      effectiveThetaOverride
+    );
+
+    if (cleanComment) {
+      commentEmbedding = await generateEmbedding(cleanComment);
+    }
+  } catch (err: unknown) {
+    console.error("[Project Valerie] Premise challenge preparation failed:", err);
+    return {
+      success: false,
+      error: "Unable to process premise challenge. Please try again later.",
+    };
   }
 
   // 5. Insert structured flag record into valerie.poll_flags
