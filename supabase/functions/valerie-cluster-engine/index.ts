@@ -26,6 +26,7 @@ import {
   calculateIncrementalVariance,
   computeBifurcatedCentroids,
 } from "./vector-math.ts";
+import { spawnAxisFour } from "./spawnAxisFour.ts";
 
 const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Origin": "*",
@@ -488,18 +489,64 @@ export async function handleClusterRequest(req: Request): Promise<Response> {
 
     // Authenticate caller (supports user JWT or service key)
     const authHeader = req.headers.get("Authorization");
+    const cronSecret = req.headers.get("x-cron-secret");
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
     let callerId: string | undefined;
 
-    if (authHeader) {
-      const token = authHeader.replace(/^Bearer\s+/i, "");
+    const isServiceKeyAuthorized = Boolean(
+      authHeader &&
+      serviceRoleKey &&
+      authHeader.replace(/^Bearer\s+/i, "").trim() === serviceRoleKey
+    );
+    const isCronAuthorized = Boolean(cronSecret && cronSecret === Deno.env.get("CRON_SECRET"));
+    let isAdminAuthorized = false;
+
+    if (authHeader && !isServiceKeyAuthorized) {
+      const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       const { data: userData } = await supabaseAdmin.auth.getUser(token);
       if (userData?.user) {
         callerId = userData.user.id;
+        // Strictly inspect app_metadata only, never user_metadata which is client-writable
+        const role = userData.user.app_metadata?.role;
+        const isAdmin = userData.user.app_metadata?.is_admin === true;
+        if (role === "admin" || role === "service_role" || isAdmin) {
+          isAdminAuthorized = true;
+        }
       }
     }
 
-    const payload: ClusterEngineRequest = await req.json();
+    const body: any = await req.json();
+
+    // Check if this is an Axis-4 follow-up spawn request (SEC_0003)
+    if (body.action === "SPAWN_AXIS_4" || body.spawn_axis_four) {
+      if (!isServiceKeyAuthorized && !isCronAuthorized && !isAdminAuthorized) {
+        return jsonResponse(
+          { error: "Unauthorized: Privileged administrative or service role token required for SPAWN_AXIS_4" },
+          403
+        );
+      }
+      if (!body.poll_id) {
+        return jsonResponse({ error: "poll_id required for SPAWN_AXIS_4 action" }, 400);
+      }
+      const axis4Result = await spawnAxisFour(body.poll_id, {
+        supabase: supabaseAdmin,
+        openaiApiKey: openAiApiKey,
+        dryRun: body.dryRun === true,
+      });
+      return jsonResponse(axis4Result);
+    }
+
+    if (!isServiceKeyAuthorized && !isCronAuthorized && !isAdminAuthorized && !callerId) {
+      return jsonResponse(
+        { error: "Unauthorized: Valid user JWT, cron secret, or service role key required." },
+        401
+      );
+    }
+
+    const payload: ClusterEngineRequest = body;
+    if (!isServiceKeyAuthorized && !isCronAuthorized && !isAdminAuthorized && callerId) {
+      payload.user_id = callerId;
+    }
 
     if (
       typeof payload.likert_score !== "number" ||
