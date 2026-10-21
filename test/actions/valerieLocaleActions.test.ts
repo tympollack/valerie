@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fetchPollResultsByLocale } from "@/app/actions/valerieLocaleActions";
 
 let mockRpcResult: Record<string, any> = {};
+let mockAuthUser: any = undefined;
+let mockVoteRecord: any = undefined;
+let mockFlagRecord: any = undefined;
+
 const mockRpc = vi.fn(async (funcName: string, args: any) => {
   const key = `${funcName}:${args?.p_granularity || "NATIONAL"}`;
   if (mockRpcResult[key]) {
@@ -10,13 +14,31 @@ const mockRpc = vi.fn(async (funcName: string, args: any) => {
   return { data: [], error: null };
 });
 
+const mockFrom = vi.fn((table: string) => ({
+  select: vi.fn(() => ({
+    eq: vi.fn(() => ({
+      eq: vi.fn(() => ({
+        maybeSingle: vi.fn(async () => {
+          if (table === "poll_responses") return { data: mockVoteRecord, error: null };
+          if (table === "poll_flags") return { data: mockFlagRecord, error: null };
+          return { data: null, error: null };
+        }),
+      })),
+    })),
+  })),
+}));
+
 const mockSchema = vi.fn(() => ({
   rpc: mockRpc,
+  from: mockFrom,
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     schema: mockSchema,
+    auth: {
+      getUser: vi.fn(async () => ({ data: { user: mockAuthUser }, error: null })),
+    },
   })),
 }));
 
@@ -24,6 +46,9 @@ describe("valerieLocaleActions: fetchPollResultsByLocale", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRpcResult = {};
+    mockAuthUser = { id: "user-123" };
+    mockVoteRecord = { locked_until: new Date(Date.now() - 10000).toISOString() };
+    mockFlagRecord = null;
   });
 
   it("validates pollId and granularity inputs", async () => {
@@ -144,5 +169,30 @@ describe("valerieLocaleActions: fetchPollResultsByLocale", () => {
 
     expect(res.success).toBe(false);
     expect(res.error).toContain("LOCK_WINDOW_ACTIVE");
+  });
+
+  describe("Security & Participation Gate Verification", () => {
+    it("enforces authentication requirement on anonymous callers (SEC_0004)", async () => {
+      mockAuthUser = null;
+      const res = await fetchPollResultsByLocale("poll-123", "NATIONAL");
+      expect(res.success).toBe(false);
+      expect(res.error).toContain("AUTH_REQUIRED");
+    });
+
+    it("enforces participation requirement when user has neither voted nor challenged", async () => {
+      mockVoteRecord = null;
+      mockFlagRecord = null;
+      const res = await fetchPollResultsByLocale("poll-123", "NATIONAL");
+      expect(res.success).toBe(false);
+      expect(res.error).toContain("NO_PARTICIPATION");
+    });
+
+    it("enforces active challenge lock even when earlier vote lock is expired (SEC_0005)", async () => {
+      mockVoteRecord = { locked_until: new Date(Date.now() - 3600000).toISOString() }; // Expired 1h ago
+      mockFlagRecord = { locked_until: new Date(Date.now() + 86400000).toISOString() }; // Active 24h challenge
+      const res = await fetchPollResultsByLocale("poll-123", "NATIONAL");
+      expect(res.success).toBe(false);
+      expect(res.error).toContain("LOCK_WINDOW_ACTIVE");
+    });
   });
 });

@@ -370,7 +370,7 @@ export async function spawnAxisFour(
     };
   }
 
-  // 6. Insert new poll into valerie.polls linked to parent_poll_id
+  // 6. Insert new poll into valerie.polls linked to parent_poll_id with concurrency guard (BUG_0004)
   let newPollId = crypto.randomUUID();
   const ecosystemRefs = {
     ...(parentPoll?.related_ecosystem_refs || {}),
@@ -378,6 +378,27 @@ export async function spawnAxisFour(
   };
 
   if (supabase && !options?.dryRun) {
+    // Re-verify immediately prior to insert to catch races during LLM synthesis
+    const { data: existingAxes } = await supabase
+      .schema("valerie")
+      .from("polls")
+      .select("id, question_text, related_ecosystem_refs")
+      .eq("axis_category", "COMMUNITY_SPAWNED_AXIS");
+
+    const match = (existingAxes || []).find((p: any) =>
+      p.related_ecosystem_refs?.parent_poll_id === pollId
+    );
+
+    if (match) {
+      return {
+        success: true,
+        spawned: false,
+        reason: "AXIS_4_ALREADY_EXISTS",
+        poll_id: match.id,
+        question_text: match.question_text,
+      };
+    }
+
     const { data: inserted, error } = await supabase
       .schema("valerie")
       .from("polls")
@@ -397,6 +418,27 @@ export async function spawnAxisFour(
       .single();
 
     if (error) {
+      // Handle race condition where another transaction committed concurrently
+      const { data: postConflictAxes } = await supabase
+        .schema("valerie")
+        .from("polls")
+        .select("id, question_text, related_ecosystem_refs")
+        .eq("axis_category", "COMMUNITY_SPAWNED_AXIS");
+
+      const conflictMatch = (postConflictAxes || []).find((p: any) =>
+        p.related_ecosystem_refs?.parent_poll_id === pollId
+      );
+
+      if (conflictMatch) {
+        return {
+          success: true,
+          spawned: false,
+          reason: "AXIS_4_ALREADY_EXISTS",
+          poll_id: conflictMatch.id,
+          question_text: conflictMatch.question_text,
+        };
+      }
+
       throw new Error(`Failed to insert Axis-4 poll: ${error.message}`);
     }
     if (inserted?.id) {

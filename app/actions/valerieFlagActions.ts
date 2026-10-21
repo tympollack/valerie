@@ -114,30 +114,30 @@ export async function resolveUserThetaVector(
   }
 
   // 2. Derive belief vector from historical voting patterns if available
-  try {
-    const { data: pastResponses } = await supabase
-      .schema("valerie")
-      .from("poll_responses")
-      .select("likert_score, confidence_score, comment")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(10);
+  const { data: pastResponses, error: historyError } = await supabase
+    .schema("valerie")
+    .from("poll_responses")
+    .select("likert_score, confidence_score, comment")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(10);
 
-    if (pastResponses && pastResponses.length > 0) {
-      const avgLikert =
-        pastResponses.reduce((sum: number, r: any) => sum + (r.likert_score ?? 0), 0) /
-        pastResponses.length;
-      const avgConf =
-        pastResponses.reduce((sum: number, r: any) => sum + (r.confidence_score ?? 50), 0) /
-        pastResponses.length;
-      const seedText = `user-theta:${userId}:${pastResponses.length}:${avgLikert.toFixed(2)}:${avgConf.toFixed(0)}`;
-      return generateDeterministicEmbedding(seedText);
-    }
-  } catch {
-    // Fall back to deterministic user seed
+  if (historyError) {
+    throw new Error(`Failed to read voter response history for belief vector: ${historyError.message}`);
   }
 
-  // 3. Deterministic user anchor fallback
+  if (pastResponses && pastResponses.length > 0) {
+    const avgLikert =
+      pastResponses.reduce((sum: number, r: any) => sum + (r.likert_score ?? 0), 0) /
+      pastResponses.length;
+    const avgConf =
+      pastResponses.reduce((sum: number, r: any) => sum + (r.confidence_score ?? 50), 0) /
+      pastResponses.length;
+    const seedText = `user-theta:${userId}:${pastResponses.length}:${avgLikert.toFixed(2)}:${avgConf.toFixed(0)}`;
+    return generateDeterministicEmbedding(seedText);
+  }
+
+  // 3. Deterministic user anchor fallback (only for genuine first-time voters with 0 past responses)
   return generateDeterministicEmbedding(`valerie-user-prior:${userId}`);
 }
 
@@ -284,16 +284,26 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const effectiveThetaOverride =
     process.env.NODE_ENV === "test" ? thetaVectorOverride : undefined;
 
-  const userTheta = await resolveUserThetaVector(
-    supabase,
-    user.id,
-    user as unknown as Record<string, unknown>,
-    effectiveThetaOverride
-  );
-
+  let userTheta: number[];
   let commentEmbedding: number[] | null = null;
-  if (cleanComment) {
-    commentEmbedding = await generateEmbedding(cleanComment);
+
+  try {
+    userTheta = await resolveUserThetaVector(
+      supabase,
+      user.id,
+      user as unknown as Record<string, unknown>,
+      effectiveThetaOverride
+    );
+
+    if (cleanComment) {
+      commentEmbedding = await generateEmbedding(cleanComment);
+    }
+  } catch (err: unknown) {
+    console.error("[Project Valerie] Premise challenge preparation failed:", err);
+    return {
+      success: false,
+      error: "Unable to process premise challenge. Please try again later.",
+    };
   }
 
   // 5. Insert structured flag record into valerie.poll_flags
@@ -337,6 +347,22 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
 
   const lockedUntil =
     data?.locked_until || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  // 5b. Persist verified belief vector snapshot via service role client (SEC_0001)
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (data?.id && serviceRoleKey && supabaseUrl) {
+    try {
+      const adminClient = createSupabaseClient(supabaseUrl, serviceRoleKey);
+      await (adminClient as any)
+        .schema("valerie")
+        .from("poll_flags")
+        .update({ user_theta_snapshot: formatVectorForPg(userTheta) })
+        .eq("id", data.id);
+    } catch (adminErr) {
+      console.warn("[Project Valerie] Non-blocking snapshot backfill warning:", adminErr);
+    }
+  }
 
   // 6. Trigger evaluate_poll_flag_consensus within request boundary to ensure serverless execution completes
   try {

@@ -70,7 +70,7 @@ export interface DecomposedAxis {
 export interface HeraldIngestResult {
   ingest_id: string;
   headline: string;
-  status: "auto_published" | "merged_duplicate" | "cynic_rejected" | "skipped_low_controversy" | "failed";
+  status: "auto_published" | "merged_duplicate" | "cynic_rejected" | "skipped_low_controversy" | "failed" | "already_claimed";
   controversy_dispersion: number;
   duplicate_of_id?: string;
   published_poll_ids?: string[];
@@ -396,7 +396,8 @@ export async function runAdversarialRefereePipeline(
  */
 export async function checkSemanticDeduplication(
   eventEmbedding: number[],
-  supabase?: any
+  supabase?: any,
+  excludeIngestId?: string
 ): Promise<{ isDuplicate: boolean; duplicateId?: string; existingUrls?: string[]; clusterId?: string }> {
   if (!supabase) {
     return { isDuplicate: false };
@@ -417,7 +418,7 @@ export async function checkSemanticDeduplication(
 
     if (Array.isArray(recentIngests)) {
       for (const row of recentIngests) {
-        if (!row.event_embedding) continue;
+        if (!row.event_embedding || row.id === excludeIngestId) continue;
         let rowVec: number[];
         if (Array.isArray(row.event_embedding)) {
           rowVec = row.event_embedding;
@@ -490,13 +491,28 @@ export async function processHeraldIngest(
     supabase?: any;
     openaiApiKey?: string;
     dryRun?: boolean;
+    existingIngestId?: string;
   }
 ): Promise<HeraldIngestResult> {
   const supabase = options?.supabase;
-  const ingestId = crypto.randomUUID();
+  const ingestId = options?.existingIngestId || crypto.randomUUID();
 
   // 1. Controversy Dispersion Check
   if (cluster.controversy_dispersion < 0.65) {
+    if (supabase && options?.existingIngestId && !options?.dryRun) {
+      await supabase
+        .schema("valerie")
+        .from("news_ingest_queue")
+        .update({
+          status: "skipped_low_controversy",
+          metadata: {
+            reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.65 threshold.`,
+            evaluated_at: new Date().toISOString(),
+          },
+        })
+        .eq("id", ingestId);
+    }
+
     return {
       ingest_id: ingestId,
       headline: cluster.headline,
@@ -512,7 +528,7 @@ export async function processHeraldIngest(
   const sourceUrls = cluster.sources.map((s) => s.url);
 
   // 3. Semantic Deduplication (pgvector similarity > 0.90 within 72h or against active clusters)
-  const deduplication = await checkSemanticDeduplication(eventEmbedding, supabase);
+  const deduplication = await checkSemanticDeduplication(eventEmbedding, supabase, options?.existingIngestId);
   if (deduplication.isDuplicate) {
     const dupId = deduplication.duplicateId || deduplication.clusterId;
     if (supabase && !options?.dryRun) {
@@ -528,19 +544,31 @@ export async function processHeraldIngest(
           .eq("id", deduplication.duplicateId);
       }
 
-      await supabase
-        .schema("valerie")
-        .from("news_ingest_queue")
-        .insert({
-          id: ingestId,
-          event_title: cluster.headline,
-          event_description: cluster.summary,
-          event_embedding: formatVectorForPg(eventEmbedding),
-          source_urls: sourceUrls,
-          controversy_score: cluster.controversy_dispersion,
-          status: "merged_duplicate",
-          metadata: { duplicate_of: dupId },
-        });
+      if (options?.existingIngestId) {
+        await supabase
+          .schema("valerie")
+          .from("news_ingest_queue")
+          .update({
+            status: "merged_duplicate",
+            metadata: { duplicate_of: dupId },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", ingestId);
+      } else {
+        await supabase
+          .schema("valerie")
+          .from("news_ingest_queue")
+          .insert({
+            id: ingestId,
+            event_title: cluster.headline,
+            event_description: cluster.summary,
+            event_embedding: formatVectorForPg(eventEmbedding),
+            source_urls: sourceUrls,
+            controversy_score: cluster.controversy_dispersion,
+            status: "merged_duplicate",
+            metadata: { duplicate_of: dupId },
+          });
+      }
     }
 
     return {
@@ -553,25 +581,55 @@ export async function processHeraldIngest(
     };
   }
 
-  // Stage Ingest Queue Record as 'processing' (ensures atomicity and traceability)
+  // Stage Ingest Queue Record as 'processing' (ensures atomicity, vector persistence, and traceability)
   if (supabase && !options?.dryRun) {
-    await supabase
-      .schema("valerie")
-      .from("news_ingest_queue")
-      .insert({
-        id: ingestId,
-        event_title: cluster.headline,
-        event_description: cluster.summary,
-        event_embedding: formatVectorForPg(eventEmbedding),
-        source_urls: sourceUrls,
-        controversy_score: cluster.controversy_dispersion,
-        status: "processing",
-        metadata: {
-          scope_tier: cluster.scope_tier,
-          detected_locales: cluster.detected_locales,
-          started_at: new Date().toISOString(),
-        },
-      });
+    if (options?.existingIngestId) {
+      // Atomically claim pending row to prevent concurrent workers from duplicating publications (BUG_0002)
+      // Also persist the event embedding so queued stories participate in deduplication (ANALYSIS_0002)
+      const { data: claimedRows, error: claimErr } = await supabase
+        .schema("valerie")
+        .from("news_ingest_queue")
+        .update({
+          status: "processing",
+          event_embedding: formatVectorForPg(eventEmbedding),
+          metadata: {
+            scope_tier: cluster.scope_tier,
+            detected_locales: cluster.detected_locales,
+            started_at: new Date().toISOString(),
+          },
+        })
+        .eq("id", ingestId)
+        .eq("status", "pending")
+        .select("id");
+
+      if (claimErr || !claimedRows || claimedRows.length === 0) {
+        return {
+          ingest_id: ingestId,
+          headline: cluster.headline,
+          status: "already_claimed",
+          controversy_dispersion: cluster.controversy_dispersion,
+          reason: `Queue record ${ingestId} was already claimed by another worker or is no longer pending.`,
+        };
+      }
+    } else {
+      await supabase
+        .schema("valerie")
+        .from("news_ingest_queue")
+        .insert({
+          id: ingestId,
+          event_title: cluster.headline,
+          event_description: cluster.summary,
+          event_embedding: formatVectorForPg(eventEmbedding),
+          source_urls: sourceUrls,
+          controversy_score: cluster.controversy_dispersion,
+          status: "processing",
+          metadata: {
+            scope_tier: cluster.scope_tier,
+            detected_locales: cluster.detected_locales,
+            started_at: new Date().toISOString(),
+          },
+        });
+    }
   }
 
   // 4. Adversarial Dual-Agent IRT Decomposition (Agent 1 + Agent 2 Referee)
@@ -750,13 +808,20 @@ export async function handleHeraldRequest(req: Request): Promise<Response> {
     if (!isCronAuthorized && !isServiceKeyAuthorized && authHeader && supabase) {
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       const { data: userData } = await supabase.auth.getUser(token);
-      if (userData?.user) {
-        isUserAuthorized = true;
+      const user = userData?.user;
+      if (user) {
+        // Enforce administrative authorization to prevent unauthorized poll publication
+        // Strictly inspect app_metadata only, never user_metadata which is client-writable (SEC_0001)
+        const role = user.app_metadata?.role;
+        const isAdmin = user.app_metadata?.is_admin === true;
+        if (role === "admin" || role === "service_role" || isAdmin) {
+          isUserAuthorized = true;
+        }
       }
     }
 
-    if (!isCronAuthorized && !isServiceKeyAuthorized && !isUserAuthorized && !body.dryRun) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+    if (!isCronAuthorized && !isServiceKeyAuthorized && !isUserAuthorized) {
+      return jsonResponse({ error: "Unauthorized: Administrative privileges or cron secret required." }, 401);
     }
 
     // 2. Direct event ingestion payload with bounds validation (SEC_0002)
@@ -848,8 +913,11 @@ export async function handleHeraldRequest(req: Request): Promise<Response> {
             supabase,
             openaiApiKey,
             dryRun: body.dryRun === true,
+            existingIngestId: row.id,
           });
-          batchResults.push(res);
+          if (res.status !== "already_claimed") {
+            batchResults.push(res);
+          }
         }
 
         return jsonResponse({
