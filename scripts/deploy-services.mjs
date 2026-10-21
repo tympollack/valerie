@@ -37,6 +37,19 @@ const projectRef =
   process.env.SUPABASE_PROJECT_ID ||
   "rweehbzsflhhtwjrjnvy"; // Default to SunShade production/staging ref
 
+// Enforce strict alphanumeric format to prevent shell metacharacter injection (SEC_0001)
+if (!/^[a-z0-9_-]+$/i.test(projectRef)) {
+  console.error(`❌ Invalid project reference format: "${projectRef}". Must contain only alphanumeric characters, dashes, and underscores.`);
+  process.exit(1);
+}
+
+function resolveBinary(cmd) {
+  if (process.platform === "win32") {
+    return `${cmd}.cmd`;
+  }
+  return cmd;
+}
+
 function runCommand(command, cmdArgs, cwd = ROOT_DIR) {
   const display = `${command} ${cmdArgs.join(" ")}`;
   console.log(`\n==> Executing: ${display} (cwd: ${cwd})`);
@@ -46,10 +59,11 @@ function runCommand(command, cmdArgs, cwd = ROOT_DIR) {
     return true;
   }
 
-  const result = spawnSync(command, cmdArgs, {
+  const bin = resolveBinary(command);
+  const result = spawnSync(bin, cmdArgs, {
     cwd,
     stdio: "inherit",
-    shell: true,
+    shell: false,
   });
 
   if (result.error) {
