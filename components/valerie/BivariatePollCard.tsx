@@ -42,6 +42,8 @@ export interface BivariatePollCardProps {
   relatedEcosystemRefs?: Record<string, unknown> | null
   initialLocaleResults?: LocaleSentimentRecord[]
   initialGranularity?: LocaleGranularity
+  detectedLocales?: string[]
+  targetLocaleCode?: string
 }
 
 const LIKERT_STEPS = [
@@ -166,15 +168,17 @@ function getConfidenceDescription(val: number): {
 // =============================================================================
 
 export function BivariatePollCard({
-  pollId = "demo-poll-01",
-  questionText = "The municipal council should convert Main Street into a [[pedestrian-only zone]] to boost community sentiment and local commerce.",
-  category = "Urban Planning & Civic Infrastructure",
+  pollId = "",
+  questionText = "",
+  category = "Civic Deliberation",
   onVoteSuccess,
   onFlagSuccess,
   className,
   relatedEcosystemRefs,
   initialLocaleResults,
   initialGranularity,
+  detectedLocales,
+  targetLocaleCode,
 }: BivariatePollCardProps) {
   // --- Form state
   const [likertScore, setLikertScore] = useState<number>(0)

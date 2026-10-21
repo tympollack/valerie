@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "valerie-herald-cron",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-14",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "triggers": {
+    "crons": [
+      "0 */2 * * *"
+    ]
+  },
+  "vars": {
+    "HERALD_AGENT_ENDPOINT": "https://valerie-stag.supabase.co/functions/v1/valerie-herald-agent",
+    "MIN_CONTROVERSY_DISPERSION": "0.65",
+    "DEFAULT_SCOPE_TIER": "NATIONAL",
+    "DEFAULT_LOCALE": "US",
+    "GDELT_QUERY": "civic OR policy OR legislation OR congress OR court OR election",
+    "MAX_ARTICLES_PER_CLUSTER": "6",
+    "MAX_CLUSTERS_PER_RUN": "3"
+  }
+}

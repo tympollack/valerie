@@ -1,0 +1,17 @@
+{
+  "name": "valerie-herald-cron",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cloudflare Cron Worker for Valerie Autonomous Controversial Headline Agent",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run ../../test/workers/heraldCron.test.ts",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240925.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^3.78.10"
+  }
+}
