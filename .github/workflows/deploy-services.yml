@@ -1,0 +1,113 @@
+name: Deploy Edge Functions & Workers
+
+on:
+  push:
+    branches:
+      - staging
+      - main
+    paths:
+      - "supabase/functions/**"
+      - "workers/**"
+      - ".github/workflows/deploy-services.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target deployment environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy-supabase-functions:
+    name: Deploy Supabase Edge Functions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.121.0
+
+      - name: Determine Project ID
+        id: proj
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ] || [ "${{ inputs.target }}" = "production" ]; then
+            echo "project_id=${{ secrets.PROD_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || 'rweehbzsflhhtwjrjnvy' }}" >> $GITHUB_OUTPUT
+          else
+            echo "project_id=${{ secrets.STAGING_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || 'rweehbzsflhhtwjrjnvy' }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set Edge Function Secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          PROJECT_ID="${{ steps.proj.outputs.project_id }}"
+          if [ -n "${{ secrets.OPENAI_API_KEY }}" ] && [ -n "${{ secrets.CRON_SECRET }}" ]; then
+            supabase secrets set \
+              OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+              CRON_SECRET="${{ secrets.CRON_SECRET }}" \
+              --project-ref "$PROJECT_ID"
+          fi
+
+      - name: Deploy Valerie Herald Agent
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy valerie-herald-agent \
+            --project-ref "${{ steps.proj.outputs.project_id }}" \
+            --no-verify-jwt
+
+      - name: Deploy Valerie Cluster Engine
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy valerie-cluster-engine \
+            --project-ref "${{ steps.proj.outputs.project_id }}" \
+            --no-verify-jwt
+
+      - name: Deploy Simplify Word
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy simplify-word \
+            --project-ref "${{ steps.proj.outputs.project_id }}"
+
+  deploy-cloudflare-worker:
+    name: Deploy Valerie Herald Cron Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/valerie-herald-cron
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: workers/valerie-herald-cron/package.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Deploy Worker to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/valerie-herald-cron
+          secrets: |
+            CRON_SECRET
+            TRIGGER_SECRET
+            SUPABASE_SERVICE_ROLE_KEY
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TRIGGER_SECRET: ${{ secrets.TRIGGER_SECRET }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
