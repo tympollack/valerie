@@ -489,21 +489,41 @@ export async function handleClusterRequest(req: Request): Promise<Response> {
 
     // Authenticate caller (supports user JWT or service key)
     const authHeader = req.headers.get("Authorization");
+    const cronSecret = req.headers.get("x-cron-secret");
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
     let callerId: string | undefined;
 
-    if (authHeader) {
-      const token = authHeader.replace(/^Bearer\s+/i, "");
+    const isServiceKeyAuthorized = Boolean(
+      authHeader &&
+      serviceRoleKey &&
+      authHeader.replace(/^Bearer\s+/i, "").trim() === serviceRoleKey
+    );
+    const isCronAuthorized = Boolean(cronSecret && cronSecret === Deno.env.get("CRON_SECRET"));
+    let isAdminAuthorized = false;
+
+    if (authHeader && !isServiceKeyAuthorized) {
+      const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       const { data: userData } = await supabaseAdmin.auth.getUser(token);
       if (userData?.user) {
         callerId = userData.user.id;
+        const role = userData.user.app_metadata?.role || userData.user.user_metadata?.role;
+        const isAdmin = userData.user.app_metadata?.is_admin === true || userData.user.user_metadata?.is_admin === true;
+        if (role === "admin" || role === "service_role" || isAdmin) {
+          isAdminAuthorized = true;
+        }
       }
     }
 
     const body: any = await req.json();
 
-    // Check if this is an Axis-4 follow-up spawn request
+    // Check if this is an Axis-4 follow-up spawn request (SEC_0003)
     if (body.action === "SPAWN_AXIS_4" || body.spawn_axis_four) {
+      if (!isServiceKeyAuthorized && !isCronAuthorized && !isAdminAuthorized) {
+        return jsonResponse(
+          { error: "Unauthorized: Privileged administrative or service role token required for SPAWN_AXIS_4" },
+          403
+        );
+      }
       if (!body.poll_id) {
         return jsonResponse({ error: "poll_id required for SPAWN_AXIS_4 action" }, 400);
       }

@@ -1,19 +1,9 @@
 "use client";
 
-import { useState, useEffect, useTransition, useMemo } from "react";
+import { useState, useEffect, useTransition, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import {
-  Globe,
-  MapPin,
-  Building2,
-  Compass,
-  AlertTriangle,
-  Clock,
-  Sparkles,
-  ExternalLink,
-  ShieldCheck,
-  Activity,
-  Layers,
+  Globe, MapPin, Building2, Compass, AlertTriangle, Clock, Sparkles, ExternalLink, ShieldCheck, Activity, Layers,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -85,12 +75,18 @@ export function LocaleSentimentExplorer({
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [temporalMode, setTemporalMode] = useState<"side-by-side" | "shockwave" | "settled">("side-by-side");
+  const activeRequestRef = useRef<number>(0);
 
-  // Automatically fetch initial records if none were supplied
+  // Automatically fetch initial records if none were supplied, and reset when pollId changes (BUG_0003)
   useEffect(() => {
+    setRecords(initialRecords);
+    setFallbackMessage(null);
+
     if (pollId && initialRecords.length === 0) {
+      const requestId = ++activeRequestRef.current;
       startTransition(async () => {
         const result = await fetchPollResultsByLocale(pollId, granularity);
+        if (activeRequestRef.current !== requestId) return; // Discard stale response
         if (result.success) {
           setRecords(result.data);
           if (result.fallbackApplied && result.fallbackReason) {
@@ -140,8 +136,10 @@ export function LocaleSentimentExplorer({
 
     if (!pollId) return;
 
+    const requestId = ++activeRequestRef.current;
     startTransition(async () => {
       const result = await fetchPollResultsByLocale(pollId, newGranularity);
+      if (activeRequestRef.current !== requestId) return; // Discard stale response
       if (result.success) {
         setRecords(result.data);
         if (result.fallbackApplied && result.fallbackReason) {

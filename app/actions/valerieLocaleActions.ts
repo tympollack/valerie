@@ -93,50 +93,60 @@ export async function fetchPollResultsByLocale(
   try {
     const supabase = await createClient();
 
-    // Defense-in-depth: Reveal gate verification at Server Action boundary
+    // Defense-in-depth: Reveal gate verification at Server Action boundary (SEC_0004 & SEC_0005)
     if (typeof (supabase as any).auth?.getUser === "function") {
       const { data: authData } = await (supabase as any).auth.getUser();
       const currentUser = authData?.user;
 
-      if (currentUser) {
-        const [voteRes, flagRes] = await Promise.all([
-          (supabase as any)
-            .schema("valerie")
-            .from("poll_responses")
-            .select("locked_until")
-            .eq("poll_id", pollId)
-            .eq("user_id", currentUser.id)
-            .maybeSingle(),
-          (supabase as any)
-            .schema("valerie")
-            .from("poll_flags")
-            .select("locked_until")
-            .eq("poll_id", pollId)
-            .eq("user_id", currentUser.id)
-            .maybeSingle(),
-        ]);
+      if (!currentUser) {
+        return {
+          success: false,
+          granularity: upperGranularity,
+          data: [],
+          error: "AUTH_REQUIRED: You must be signed in and participate before community results unlock.",
+        };
+      }
 
-        const voteLock = voteRes?.data?.locked_until;
-        const flagLock = flagRes?.data?.locked_until;
+      const [voteRes, flagRes] = await Promise.all([
+        (supabase as any)
+          .schema("valerie")
+          .from("poll_responses")
+          .select("locked_until")
+          .eq("poll_id", pollId)
+          .eq("user_id", currentUser.id)
+          .maybeSingle(),
+        (supabase as any)
+          .schema("valerie")
+          .from("poll_flags")
+          .select("locked_until")
+          .eq("poll_id", pollId)
+          .eq("user_id", currentUser.id)
+          .maybeSingle(),
+      ]);
 
-        if (!voteLock && !flagLock) {
-          return {
-            success: false,
-            granularity: upperGranularity,
-            data: [],
-            error: "NO_PARTICIPATION: You must vote or challenge before community results unlock.",
-          };
-        }
+      const voteLock = voteRes?.data?.locked_until;
+      const flagLock = flagRes?.data?.locked_until;
 
-        const effectiveLock = new Date(voteLock || flagLock).getTime();
-        if (Date.now() < effectiveLock) {
-          return {
-            success: false,
-            granularity: upperGranularity,
-            data: [],
-            error: `LOCK_WINDOW_ACTIVE: Results remain sealed until ${new Date(effectiveLock).toISOString()}`,
-          };
-        }
+      if (!voteLock && !flagLock) {
+        return {
+          success: false,
+          granularity: upperGranularity,
+          data: [],
+          error: "NO_PARTICIPATION: You must vote or challenge before community results unlock.",
+        };
+      }
+
+      const voteLockTime = voteLock ? new Date(voteLock).getTime() : 0;
+      const flagLockTime = flagLock ? new Date(flagLock).getTime() : 0;
+      const maxLockTime = Math.max(voteLockTime, flagLockTime);
+
+      if (maxLockTime > 0 && Date.now() < maxLockTime) {
+        return {
+          success: false,
+          granularity: upperGranularity,
+          data: [],
+          error: `LOCK_WINDOW_ACTIVE: Results remain sealed until ${new Date(maxLockTime).toISOString()}`,
+        };
       }
     }
 

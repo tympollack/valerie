@@ -114,30 +114,30 @@ export async function resolveUserThetaVector(
   }
 
   // 2. Derive belief vector from historical voting patterns if available
-  try {
-    const { data: pastResponses } = await supabase
-      .schema("valerie")
-      .from("poll_responses")
-      .select("likert_score, confidence_score, comment")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(10);
+  const { data: pastResponses, error: historyError } = await supabase
+    .schema("valerie")
+    .from("poll_responses")
+    .select("likert_score, confidence_score, comment")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(10);
 
-    if (pastResponses && pastResponses.length > 0) {
-      const avgLikert =
-        pastResponses.reduce((sum: number, r: any) => sum + (r.likert_score ?? 0), 0) /
-        pastResponses.length;
-      const avgConf =
-        pastResponses.reduce((sum: number, r: any) => sum + (r.confidence_score ?? 50), 0) /
-        pastResponses.length;
-      const seedText = `user-theta:${userId}:${pastResponses.length}:${avgLikert.toFixed(2)}:${avgConf.toFixed(0)}`;
-      return generateDeterministicEmbedding(seedText);
-    }
-  } catch {
-    // Fall back to deterministic user seed
+  if (historyError) {
+    throw new Error(`Failed to read voter response history for belief vector: ${historyError.message}`);
   }
 
-  // 3. Deterministic user anchor fallback
+  if (pastResponses && pastResponses.length > 0) {
+    const avgLikert =
+      pastResponses.reduce((sum: number, r: any) => sum + (r.likert_score ?? 0), 0) /
+      pastResponses.length;
+    const avgConf =
+      pastResponses.reduce((sum: number, r: any) => sum + (r.confidence_score ?? 50), 0) /
+      pastResponses.length;
+    const seedText = `user-theta:${userId}:${pastResponses.length}:${avgLikert.toFixed(2)}:${avgConf.toFixed(0)}`;
+    return generateDeterministicEmbedding(seedText);
+  }
+
+  // 3. Deterministic user anchor fallback (only for genuine first-time voters with 0 past responses)
   return generateDeterministicEmbedding(`valerie-user-prior:${userId}`);
 }
 
