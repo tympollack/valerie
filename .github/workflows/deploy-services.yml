@@ -67,11 +67,10 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           if [ -n "${{ secrets.OPENAI_API_KEY }}" ] && [ -n "${{ secrets.CRON_SECRET }}" ]; then
-            echo "Attempting to sync Supabase Edge Function secrets..."
             supabase secrets set \
               OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
               CRON_SECRET="${{ secrets.CRON_SECRET }}" \
-              --project-ref "$PROJECT_ID" || echo "⚠️ Warning: Could not set secrets via Supabase CLI (check token permissions or configure secrets in Supabase Dashboard)."
+              --project-ref "$PROJECT_ID"
           fi
 
       - name: Deploy Valerie Herald Agent
@@ -117,15 +116,13 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Resolve Worker Endpoint & Service Key
+      - name: Resolve Worker Endpoint
         env:
           TARGET_INPUT: ${{ inputs.target }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           PROD_PID: ${{ secrets.PROD_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
           STAG_PID: ${{ secrets.STAGING_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
-          PROD_KEY: ${{ secrets.PROD_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STAG_KEY: ${{ secrets.STAGING_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             TARGET="$TARGET_INPUT"
@@ -137,10 +134,8 @@ jobs:
 
           if [ "$TARGET" = "production" ]; then
             PID="$PROD_PID"
-            KEY="$PROD_KEY"
           else
             PID="$STAG_PID"
-            KEY="$STAG_KEY"
           fi
 
           if [ -z "$PID" ]; then
@@ -148,9 +143,7 @@ jobs:
             exit 1
           fi
 
-          ENDPOINT="https://${PID}.supabase.co/functions/v1/valerie-herald-agent"
-          echo "HERALD_AGENT_ENDPOINT=$ENDPOINT" >> $GITHUB_ENV
-          echo "SERVICE_ROLE_KEY=$KEY" >> $GITHUB_ENV
+          echo "HERALD_AGENT_ENDPOINT=https://${PID}.supabase.co/functions/v1/valerie-herald-agent" >> $GITHUB_ENV
 
       - name: Deploy Worker to Cloudflare
         uses: cloudflare/wrangler-action@v3
@@ -166,4 +159,4 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           TRIGGER_SECRET: ${{ secrets.TRIGGER_SECRET }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ env.SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'production' || github.ref_name == 'main') && (secrets.PROD_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY) || (secrets.STAGING_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY) }}
