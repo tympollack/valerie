@@ -15,7 +15,7 @@ import {
   clusterNewsArticles,
 } from "../../workers/valerie-herald-cron/src/clustering";
 import { sanitizeLogContent, buildHeraldHeaders } from "../../workers/valerie-herald-cron/src/heraldClient";
-import worker from "../../workers/valerie-herald-cron/src/index";
+import worker, { executeHeraldCronCycle } from "../../workers/valerie-herald-cron/src/index";
 
 describe("Valerie Herald Cron Worker", () => {
   describe("GDELT Ingestion", () => {
@@ -158,6 +158,28 @@ describe("Valerie Herald Cron Worker", () => {
       const data = await res.json();
       expect(data.service).toBe("valerie-herald-cron");
       expect(data.schedule).toBe("0 */2 * * *");
+      expect(data.min_controversy_dispersion).toBe("0.27");
+    });
+
+    it("applies the 0.27 default threshold when MIN_CONTROVERSY_DISPERSION is unset", async () => {
+      const articles = [
+        {
+          title: "Zoning reform overhaul approved by council",
+          source: "times.com",
+          url: "https://times.com/zoning",
+          sentiment_score: -0.2,
+        },
+        {
+          title: "Zoning reform overhaul sparks council debate",
+          source: "herald.com",
+          url: "https://herald.com/zoning",
+          sentiment_score: 0.2,
+        },
+      ];
+
+      const summary = await executeHeraldCronCycle({}, true, articles);
+      expect(summary.clusters_evaluated).toBe(1);
+      expect(summary.clusters_dispatched).toBe(1);
     });
 
     it("enforces authentication on /trigger", async () => {

@@ -7,7 +7,7 @@
  * 1. Cron Trigger Handler:
  *    - Ingests breaking civic, legal, political, and socio-technical news events from GDELT 2.0 & RSS feeds.
  *    - Clusters coverage across diverse sources and computes cross-source controversy variance.
- *    - Filters clusters exceeding dispersion threshold (controversy >= 0.65).
+ *    - Filters clusters exceeding dispersion threshold (controversy >= 0.27).
  *    - Dispatches qualified clusters directly to valerie-herald-agent Edge Function for adversarial
  *      de-spinning (Decomposer + Cynic Referee) and auto-publication into valerie.polls.
  * 2. HTTP Fetch Handler:
@@ -31,7 +31,7 @@ export async function executeHeraldCronCycle(
   overrideArticles?: NewsArticle[]
 ): Promise<CronRunSummary> {
   const startTime = Date.now();
-  const minDispersion = parseFloat(env.MIN_CONTROVERSY_DISPERSION || "0.65");
+  const minDispersion = parseFloat(env.MIN_CONTROVERSY_DISPERSION || "0.27");
   const maxClusters = parseInt(env.MAX_CLUSTERS_PER_RUN || "3", 10);
   const errors: string[] = [];
 
@@ -187,7 +187,7 @@ export default {
           version: "1.0.0",
           schedule: "0 */2 * * *",
           description: "Cloudflare Cron Worker for Valerie Autonomous Controversial Headline Agent",
-          min_controversy_dispersion: env.MIN_CONTROVERSY_DISPERSION || "0.65",
+          min_controversy_dispersion: env.MIN_CONTROVERSY_DISPERSION || "0.27",
           herald_agent_configured: Boolean(env.HERALD_AGENT_ENDPOINT),
           timestamp: new Date().toISOString(),
         },
