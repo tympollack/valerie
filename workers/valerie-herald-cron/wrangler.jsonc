@@ -12,8 +12,8 @@
     ]
   },
   "vars": {
-    "HERALD_AGENT_ENDPOINT": "https://valerie-stag.supabase.co/functions/v1/valerie-herald-agent",
-    "MIN_CONTROVERSY_DISPERSION": "0.65",
+    "HERALD_AGENT_ENDPOINT": "https://rweehbzsflhhtwjrjnvy.supabase.co/functions/v1/valerie-herald-agent",
+    "MIN_CONTROVERSY_DISPERSION": "0.27",
     "DEFAULT_SCOPE_TIER": "NATIONAL",
     "DEFAULT_LOCALE": "US",
     "GDELT_QUERY": "civic OR policy OR legislation OR congress OR court OR election",

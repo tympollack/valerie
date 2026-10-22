@@ -7,7 +7,7 @@
  * ARCHITECTURAL PILLARS:
  * 1. Scheduled Ingestion & Controversy Variance Filtering:
  *    - Ingests breaking political, legal, environmental, and civic stories.
- *    - Computes cross-source sentiment variance; selects clusters with dispersion >= 0.65.
+ *    - Computes cross-source sentiment variance; selects clusters with dispersion >= 0.27.
  * 2. Semantic Deduplication (pgvector):
  *    - Generates 1536-dim embedding (text-embedding-3-small).
  *    - Queries valerie.news_ingest_queue & valerie.topic_clusters via cosine distance (<=>).
@@ -498,7 +498,7 @@ export async function processHeraldIngest(
   const ingestId = options?.existingIngestId || crypto.randomUUID();
 
   // 1. Controversy Dispersion Check
-  if (cluster.controversy_dispersion < 0.65) {
+  if (cluster.controversy_dispersion < 0.27) {
     if (supabase && options?.existingIngestId && !options?.dryRun) {
       await supabase
         .schema("valerie")
@@ -506,7 +506,7 @@ export async function processHeraldIngest(
         .update({
           status: "skipped_low_controversy",
           metadata: {
-            reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.65 threshold.`,
+            reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.27 threshold.`,
             evaluated_at: new Date().toISOString(),
           },
         })
@@ -518,7 +518,7 @@ export async function processHeraldIngest(
       headline: cluster.headline,
       status: "skipped_low_controversy",
       controversy_dispersion: cluster.controversy_dispersion,
-      reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.65 threshold.`,
+      reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.27 threshold.`,
     };
   }
 
