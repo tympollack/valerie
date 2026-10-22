@@ -12,7 +12,7 @@
     ]
   },
   "vars": {
-    "HERALD_AGENT_ENDPOINT": "https://valerie-stag.supabase.co/functions/v1/valerie-herald-agent",
+    "HERALD_AGENT_ENDPOINT": "https://rweehbzsflhhtwjrjnvy.supabase.co/functions/v1/valerie-herald-agent",
     "MIN_CONTROVERSY_DISPERSION": "0.65",
     "DEFAULT_SCOPE_TIER": "NATIONAL",
     "DEFAULT_LOCALE": "US",
