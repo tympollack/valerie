@@ -122,7 +122,12 @@ if (!skipEdge) {
 // 2. Deploy Cloudflare Cron Worker
 if (!skipWorker) {
   console.log("\n⚡ [2/2] Deploying Cloudflare Cron Worker (valerie-herald-cron)...");
-  const ok = runCommand("npx", ["wrangler", "deploy"], WORKER_DIR);
+  const heraldEndpoint = `https://${projectRef}.supabase.co/functions/v1/valerie-herald-agent`;
+  const ok = runCommand(
+    "npx",
+    ["wrangler", "deploy", "--var", `HERALD_AGENT_ENDPOINT:${heraldEndpoint}`],
+    WORKER_DIR
+  );
   if (!ok) {
     allSucceeded = false;
     console.warn("⚠️  Warning: Failed to deploy Cloudflare Cron Worker.");
