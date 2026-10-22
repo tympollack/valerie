@@ -1,0 +1,175 @@
+name: Deploy Edge Functions & Workers
+
+on:
+  push:
+    branches:
+      - staging
+      - main
+    paths:
+      - "supabase/functions/**"
+      - "workers/**"
+      - ".github/workflows/deploy-services.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target deployment environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy-supabase-functions:
+    name: Deploy Supabase Edge Functions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.121.0
+
+      - name: Resolve Project Environment
+        env:
+          TARGET_INPUT: ${{ inputs.target }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PROD_PID: ${{ secrets.PROD_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
+          STAG_PID: ${{ secrets.STAGING_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$TARGET_INPUT" = "production" ] && [ "$REF" != "refs/heads/main" ]; then
+              echo "❌ Error: Production deployments can only be dispatched from the main branch (refs/heads/main)."
+              exit 1
+            fi
+            TARGET="$TARGET_INPUT"
+          elif [ "$REF" = "refs/heads/main" ]; then
+            TARGET="production"
+          else
+            TARGET="staging"
+          fi
+
+          if [ "$TARGET" = "production" ]; then
+            PID="$PROD_PID"
+          else
+            PID="$STAG_PID"
+          fi
+
+          if [ -z "$PID" ]; then
+            echo "❌ Error: Neither environment-specific project ID nor SUPABASE_PROJECT_ID is configured."
+            exit 1
+          fi
+
+          echo "PROJECT_ID=$PID" >> $GITHUB_ENV
+
+      - name: Set Edge Function Secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          SECRETS_ARGS=()
+          if [ -n "${{ secrets.CRON_SECRET }}" ]; then
+            SECRETS_ARGS+=("CRON_SECRET=${{ secrets.CRON_SECRET }}")
+          fi
+          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
+            SECRETS_ARGS+=("OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}")
+          fi
+
+          if [ ${#SECRETS_ARGS[@]} -gt 0 ]; then
+            supabase secrets set "${SECRETS_ARGS[@]}" --project-ref "$PROJECT_ID"
+          fi
+
+      - name: Deploy Valerie Herald Agent
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy valerie-herald-agent \
+            --project-ref "$PROJECT_ID" \
+            --no-verify-jwt
+
+      - name: Deploy Valerie Cluster Engine
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy valerie-cluster-engine \
+            --project-ref "$PROJECT_ID" \
+            --no-verify-jwt
+
+      - name: Deploy Simplify Word
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy simplify-word \
+            --project-ref "$PROJECT_ID"
+
+  deploy-cloudflare-worker:
+    name: Deploy Valerie Herald Cron Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/valerie-herald-cron
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: workers/valerie-herald-cron/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Resolve Worker Endpoint
+        env:
+          TARGET_INPUT: ${{ inputs.target }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PROD_PID: ${{ secrets.PROD_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
+          STAG_PID: ${{ secrets.STAGING_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$TARGET_INPUT" = "production" ] && [ "$REF" != "refs/heads/main" ]; then
+              echo "❌ Error: Production deployments can only be dispatched from the main branch (refs/heads/main)."
+              exit 1
+            fi
+            TARGET="$TARGET_INPUT"
+          elif [ "$REF" = "refs/heads/main" ]; then
+            TARGET="production"
+          else
+            TARGET="staging"
+          fi
+
+          if [ "$TARGET" = "production" ]; then
+            PID="$PROD_PID"
+          else
+            PID="$STAG_PID"
+          fi
+
+          if [ -z "$PID" ]; then
+            echo "❌ Error: Neither environment-specific project ID nor SUPABASE_PROJECT_ID is configured."
+            exit 1
+          fi
+
+          echo "HERALD_AGENT_ENDPOINT=https://${PID}.supabase.co/functions/v1/valerie-herald-agent" >> $GITHUB_ENV
+
+      - name: Deploy Worker to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/valerie-herald-cron
+          command: deploy --var HERALD_AGENT_ENDPOINT:${{ env.HERALD_AGENT_ENDPOINT }}
+          secrets: |
+            CRON_SECRET
+            TRIGGER_SECRET
+            SUPABASE_SERVICE_ROLE_KEY
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TRIGGER_SECRET: ${{ secrets.TRIGGER_SECRET }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'production' || github.ref_name == 'main') && (secrets.PROD_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY) || (secrets.STAGING_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY) }}
