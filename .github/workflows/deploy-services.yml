@@ -37,17 +37,17 @@ jobs:
         env:
           TARGET_INPUT: ${{ inputs.target }}
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
           PROD_PID: ${{ secrets.PROD_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
           STAG_PID: ${{ secrets.STAGING_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "$TARGET_INPUT" = "production" ] && [ "$REF_NAME" != "main" ]; then
-              echo "❌ Error: Production deployments can only be dispatched from the main branch."
+            if [ "$TARGET_INPUT" = "production" ] && [ "$REF" != "refs/heads/main" ]; then
+              echo "❌ Error: Production deployments can only be dispatched from the main branch (refs/heads/main)."
               exit 1
             fi
             TARGET="$TARGET_INPUT"
-          elif [ "$REF_NAME" = "main" ]; then
+          elif [ "$REF" = "refs/heads/main" ]; then
             TARGET="production"
           else
             TARGET="staging"
@@ -129,17 +129,17 @@ jobs:
         env:
           TARGET_INPUT: ${{ inputs.target }}
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
           PROD_PID: ${{ secrets.PROD_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
           STAG_PID: ${{ secrets.STAGING_PROJECT_ID || secrets.SUPABASE_PROJECT_ID || vars.SUPABASE_PROJECT_ID }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "$TARGET_INPUT" = "production" ] && [ "$REF_NAME" != "main" ]; then
-              echo "❌ Error: Production deployments can only be dispatched from the main branch."
+            if [ "$TARGET_INPUT" = "production" ] && [ "$REF" != "refs/heads/main" ]; then
+              echo "❌ Error: Production deployments can only be dispatched from the main branch (refs/heads/main)."
               exit 1
             fi
             TARGET="$TARGET_INPUT"
-          elif [ "$REF_NAME" = "main" ]; then
+          elif [ "$REF" = "refs/heads/main" ]; then
             TARGET="production"
           else
             TARGET="staging"
