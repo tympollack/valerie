@@ -9,7 +9,7 @@ Automated edge-native cron worker for **Project Valerie** that periodically harv
 [ GDELT 2.0 API ] ──┐
                      ├──> [ Clustering & Dispersion Engine ]
 [ Multi-Source RSS ] ┘       - Groups articles by keyword similarity
-                             - Computes sentiment dispersion (variance >= 0.65)
+                             - Computes sentiment dispersion (variance >= 0.27)
                              - Extracts geographic scope tier (LOCAL/STATE/NATL)
                                      │
                                      ▼
