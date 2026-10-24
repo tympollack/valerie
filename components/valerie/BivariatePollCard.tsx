@@ -239,10 +239,17 @@ export function BivariatePollCard({
           setErrorMsg(result.error || "Failed to commit vote.")
         }
       } catch (err) {
-        const errorText =
+        let errorText =
           err instanceof Error
             ? err.message
             : "Failed to commit vote. Please try again."
+        if (
+          errorText.includes("Server Components render") ||
+          errorText.includes("digest")
+        ) {
+          errorText =
+            "Single-human identity verification required. Please complete verification on the SunShade Hub."
+        }
         setErrorMsg(errorText)
       }
     })
@@ -280,10 +287,17 @@ export function BivariatePollCard({
             setErrorMsg(result.error || "Failed to record premise challenge.")
           }
         } catch (err) {
-          const errorText =
+          let errorText =
             err instanceof Error
               ? err.message
               : "Failed to record premise challenge. Please try again."
+          if (
+            errorText.includes("Server Components render") ||
+            errorText.includes("digest")
+          ) {
+            errorText =
+              "Single-human identity verification required. Please complete verification on the SunShade Hub."
+          }
           setErrorMsg(errorText)
         }
       })

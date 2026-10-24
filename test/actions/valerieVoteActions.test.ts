@@ -232,4 +232,56 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("already voted");
   });
+
+  it("recovers gracefully from unexpected exceptions without bubbling up unhandled errors", async () => {
+    mockInsert.mockImplementationOnce(() => {
+      throw new Error("Unexpected database connection crash");
+    });
+
+    const result = await castVote({
+      pollId: "poll-uuid-8",
+      likertScore: 1,
+      confidenceScore: 70,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Unexpected database connection crash");
+  });
+
+  it("safely falls back to 24h lockedUntil when data.locked_until is null", async () => {
+    mockInsertResult = {
+      data: { id: "resp-202", locked_until: null },
+      error: null,
+    };
+
+    const result = await castVote({
+      pollId: "poll-uuid-9",
+      likertScore: -1,
+      confidenceScore: 40,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.lockedUntil).toBeDefined();
+    expect(new Date(result.lockedUntil!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("authenticates via middleware headers when direct Supabase SSR session is missing", async () => {
+    mockUser = null;
+    mockGetHeader.mockImplementation((name: string) => {
+      if (name === "x-user-id") return "usr-middleware-header-99";
+      if (name === "x-is-human-verified") return "true";
+      if (name === "x-verification-tier") return "COMMUNITY_VERIFIED";
+      if (name === "x-trust-state") return "active";
+      return null;
+    });
+
+    const result = await castVote({
+      pollId: "poll-uuid-10",
+      likertScore: 0,
+      confidenceScore: 50,
+    });
+
+    expect(result.success).toBe(true);
+    expect(capturedInsertPayload.user_id).toBe("usr-middleware-header-99");
+  });
 });
