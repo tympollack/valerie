@@ -5,6 +5,7 @@ let mockUserContext: any = {
   authenticated: true,
   userId: "user-123",
   email: "curator@sunshade.icu",
+  verificationTier: "TIER_1_BASIC",
 };
 
 let mockRpcResult: { data: any; error: any } = {
@@ -36,11 +37,31 @@ let mockRpcResult: { data: any; error: any } = {
   error: null,
 };
 
+let mockFallbackPolls: any[] = [];
+let mockFallbackError: any = null;
 let capturedRpcCall: { method: string; params: any } | null = null;
 
 const mockRpc = vi.fn(async (method: string, params: any) => {
   capturedRpcCall = { method, params };
   return mockRpcResult;
+});
+
+const mockFrom = vi.fn((tableName: string) => {
+  if (tableName === "polls") {
+    return {
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          order: vi.fn(() => ({
+            limit: vi.fn(async () => ({
+              data: mockFallbackPolls,
+              error: mockFallbackError,
+            })),
+          })),
+        })),
+      })),
+    };
+  }
+  return {};
 });
 
 vi.mock("@/app/actions/auth", () => ({
@@ -51,6 +72,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     schema: vi.fn((schemaName: string) => ({
       rpc: mockRpc,
+      from: mockFrom,
     })),
   })),
 }));
@@ -59,10 +81,13 @@ describe("app/actions/valerieDigestActions - getPersonalizedDigest", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedRpcCall = null;
+    mockFallbackPolls = [];
+    mockFallbackError = null;
     mockUserContext = {
       authenticated: true,
       userId: "user-123",
       email: "curator@sunshade.icu",
+      verificationTier: "TIER_1_BASIC",
     };
     mockRpcResult = {
       data: [
@@ -111,7 +136,7 @@ describe("app/actions/valerieDigestActions - getPersonalizedDigest", () => {
     expect(res.data.summary.total).toBe(3);
   });
 
-  it("respects custom limit and userIdOverride", async () => {
+  it("respects custom limit and clamps to bounded range", async () => {
     const res = await getPersonalizedDigest({ limit: 10, userIdOverride: "custom-user-999" });
 
     expect(res.success).toBe(true);
@@ -119,6 +144,10 @@ describe("app/actions/valerieDigestActions - getPersonalizedDigest", () => {
       p_user_id: "custom-user-999",
       p_limit: 10,
     });
+
+    // Limit exceeding 20 is clamped
+    await getPersonalizedDigest({ limit: 50 });
+    expect(capturedRpcCall?.params.p_limit).toBe(20);
   });
 
   it("handles unauthenticated user by dispatching null p_user_id", async () => {
@@ -133,11 +162,34 @@ describe("app/actions/valerieDigestActions - getPersonalizedDigest", () => {
     expect(capturedRpcCall?.params.p_user_id).toBeNull();
   });
 
-  it("handles RPC database errors gracefully without throwing unhandled exceptions", async () => {
+  it("falls back to querying active polls when RPC is not available", async () => {
+    mockRpcResult = {
+      data: null,
+      error: { message: "function valerie.assemble_digest_payload does not exist", code: "42883" },
+    };
+
+    mockFallbackPolls = [
+      { id: "fallback-poll-1", question_text: "Fallback Question 1", scope_tier: "LOCAL" },
+      { id: "fallback-poll-2", question_text: "Fallback Question 2", scope_tier: "STATE" },
+      { id: "fallback-poll-3", question_text: "Fallback Question 3", scope_tier: "NATIONAL" },
+    ];
+
+    const res = await getPersonalizedDigest();
+
+    expect(res.success).toBe(true);
+    expect(res.data.items).toHaveLength(3);
+    expect(res.data.items[0].category).toBe("BLINDSPOT_BRIDGE");
+    expect(res.data.items[1].category).toBe("CIVIC_ANCHOR");
+    expect(res.data.items[2].category).toBe("PERSONA_MATCH");
+  });
+
+  it("handles fallback failure cleanly without throwing unhandled exceptions", async () => {
     mockRpcResult = {
       data: null,
       error: { message: "Database connection failed", code: "PGRST001" },
     };
+    mockFallbackPolls = [];
+    mockFallbackError = { message: "Table not found" };
 
     const res = await getPersonalizedDigest();
 

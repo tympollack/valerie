@@ -96,6 +96,7 @@ if (!skipEdge) {
     { name: "valerie-herald-agent", flags: ["--no-verify-jwt"] },
     { name: "valerie-cluster-engine", flags: ["--no-verify-jwt"] },
     { name: "simplify-word", flags: [] },
+    { name: "assemble-digest", flags: [] },
   ];
 
   for (const fn of edgeFunctions) {

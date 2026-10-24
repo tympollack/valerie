@@ -36,13 +36,20 @@ Deno.serve(async (req: Request) => {
     let userId: string | null = null;
     let limit = 5;
 
-    const authHeader = req.headers.get("Authorization");
-    const client = createClient(supabaseUrl, supabaseAnonKey, {
+    const authHeader = req.headers.get("Authorization") || "";
+    const isServiceRoleCaller =
+      Boolean(supabaseServiceKey) &&
+      authHeader === `Bearer ${supabaseServiceKey}`;
+
+    // Caller client forwards incoming authorization header to enforce caller RLS
+    const callerClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: authHeader ? { Authorization: authHeader } : {} },
     });
 
     if (authHeader) {
-      const { data: { user } } = await client.auth.getUser();
+      const {
+        data: { user },
+      } = await callerClient.auth.getUser();
       if (user?.id) {
         userId = user.id;
       }
@@ -51,14 +58,12 @@ Deno.serve(async (req: Request) => {
     if (req.method === "POST") {
       try {
         const body = await req.json();
-        if (body.limit && typeof body.limit === "number") {
+        if (typeof body.limit === "number") {
           limit = body.limit;
         }
-        if (body.userId && typeof body.userId === "string") {
-          // Only allow override if caller is service_role
-          if (supabaseServiceKey && authHeader?.includes(supabaseServiceKey)) {
-            userId = body.userId;
-          }
+        // Only allow userId override if caller holds exact service_role bearer credentials
+        if (body.userId && typeof body.userId === "string" && isServiceRoleCaller) {
+          userId = body.userId;
         }
       } catch {
         // No or invalid JSON body; use defaults
@@ -72,20 +77,50 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Call valerie.assemble_digest_payload RPC
-    const dbClient = supabaseServiceKey
+    // Bound limit strictly between 1 and 20 to prevent oversized queries
+    const boundedLimit = Math.min(Math.max(Number.isFinite(limit) ? limit : 5, 1), 20);
+
+    // Call valerie.assemble_digest_payload RPC using callerClient to preserve caller context
+    const dbClient = isServiceRoleCaller && supabaseServiceKey
       ? createClient(supabaseUrl, supabaseServiceKey)
-      : client;
+      : callerClient;
 
     const { data: digest, error } = await dbClient
       .schema("valerie")
       .rpc("assemble_digest_payload", {
         p_user_id: userId,
-        p_limit: limit,
+        p_limit: boundedLimit,
       });
 
     if (error) {
-      return jsonResponse({ error: error.message }, 500);
+      // Fallback query if RPC is temporarily unavailable during staging migration sync
+      const { data: fallbackPolls, error: fallbackError } = await dbClient
+        .schema("valerie")
+        .from("polls")
+        .select("id, question_text, scope_tier, axis_category, target_locale_code, detected_locales, related_ecosystem_refs, cluster_id")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(boundedLimit);
+
+      if (fallbackError || !fallbackPolls || fallbackPolls.length === 0) {
+        return jsonResponse({ error: error.message }, 500);
+      }
+
+      const fallbackDigest = fallbackPolls.map((poll, idx) => ({
+        category: idx === 0 ? "BLINDSPOT_BRIDGE" : idx === 1 ? "CIVIC_ANCHOR" : "PERSONA_MATCH",
+        category_ratio: idx === 0 ? "10%" : idx === 1 ? "30%" : "60%",
+        poll_id: poll.id,
+        question_text: poll.question_text,
+        scope_tier: poll.scope_tier || "NATIONAL",
+        axis_category: poll.axis_category || null,
+        target_locale_code: poll.target_locale_code || null,
+        detected_locales: poll.detected_locales || [],
+        related_ecosystem_refs: poll.related_ecosystem_refs || {},
+        is_reveal_ready: false,
+        cluster_id: poll.cluster_id || null,
+      }));
+
+      return jsonResponse({ data: fallbackDigest, status: "fallback" });
     }
 
     return jsonResponse({ data: digest, status: "success" });
