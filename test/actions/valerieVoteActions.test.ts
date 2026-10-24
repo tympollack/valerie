@@ -232,4 +232,80 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("already voted");
   });
+
+  it("recovers gracefully from unexpected exceptions without bubbling up unhandled errors", async () => {
+    mockInsert.mockImplementationOnce(() => {
+      throw new Error("Unexpected database connection crash");
+    });
+
+    const result = await castVote({
+      pollId: "poll-uuid-8",
+      likertScore: 1,
+      confidenceScore: 70,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Failed to record your vote. Please try again.");
+  });
+
+  it("safely falls back to 24h lockedUntil when data.locked_until is null", async () => {
+    mockInsertResult = {
+      data: { id: "resp-202", locked_until: null },
+      error: null,
+    };
+
+    const result = await castVote({
+      pollId: "poll-uuid-9",
+      likertScore: -1,
+      confidenceScore: 40,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.lockedUntil).toBeDefined();
+    expect(new Date(result.lockedUntil!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("authenticates via Authorization bearer header when direct session cookie is missing", async () => {
+    mockUser = null;
+    mockGetHeader.mockImplementation((name: string) => {
+      if (name === "authorization" || name === "Authorization") return "Bearer test-sso-jwt-token";
+      return null;
+    });
+
+    // When getUser is called with the bearer token, return the authenticated user
+    const bearerUser = {
+      id: "usr-bearer-token-99",
+      app_metadata: {
+        is_human: true,
+        verification_tier: "COMMUNITY_VERIFIED",
+        trust_state: "active",
+      },
+      user_metadata: {},
+    };
+
+    const { createClient } = await import("@/lib/supabase/server");
+    vi.mocked(createClient).mockImplementation(async (token?: string | null) => ({
+      auth: {
+        getUser: vi.fn(async (t?: string) => {
+          if (t === "test-sso-jwt-token" || token === "test-sso-jwt-token") {
+            return { data: { user: bearerUser }, error: null };
+          }
+          return { data: { user: null }, error: new Error("Not signed in") };
+        }),
+      },
+      schema: mockSchema,
+      functions: {
+        invoke: mockInvoke,
+      },
+    } as any));
+
+    const result = await castVote({
+      pollId: "poll-uuid-10",
+      likertScore: 0,
+      confidenceScore: 50,
+    });
+
+    expect(result.success).toBe(true);
+    expect(capturedInsertPayload.user_id).toBe("usr-bearer-token-99");
+  });
 });

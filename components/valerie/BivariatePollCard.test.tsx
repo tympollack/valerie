@@ -270,4 +270,79 @@ describe("BivariatePollCard Component", () => {
       suggestedAxisComment: "A hybrid zoning approach is needed",
     });
   });
+
+  it("renders dynamic Civic Stance Archetype pill and updates to Bedrock Conviction when Likert is +2 and Confidence is 85%", async () => {
+    render(
+      <BivariatePollCard
+        pollId="test-poll-stance"
+        questionText="Civic Stance Test"
+      />
+    );
+
+    // Initial state: likert = 0, confidence = 75% -> Deliberate Equilibrium
+    const stancePill = screen.getByTestId("stance-archetype-pill");
+    expect(stancePill).toHaveTextContent("Deliberate Equilibrium");
+
+    // Move Likert to Strongly Agree (+2)
+    const stronglyAgreeBtn = screen.getByRole("radio", { name: "Strongly Agree" });
+    fireEvent.click(stronglyAgreeBtn);
+
+    // Move Confidence to 85%
+    const slider = screen.getByLabelText(/Confidence gauge slider/i);
+    act(() => {
+      fireEvent.change(slider, { target: { value: "85" } });
+    });
+
+    // Acceptance criterion: dynamically displays 'Bedrock Conviction'
+    expect(screen.getByTestId("stance-archetype-pill")).toHaveTextContent("Bedrock Conviction");
+
+    // Contextual weight profile readout
+    expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Primary Personal Anchor");
+  });
+
+  it("dynamically displays Principled Dissent and Grounded Skepticism across confidence changes for negative likert", async () => {
+    render(
+      <BivariatePollCard
+        pollId="test-poll-dissent"
+        questionText="Dissent Stance Test"
+      />
+    );
+
+    // Click Disagree (-1)
+    const disagreeBtn = screen.getByRole("radio", { name: "Disagree" });
+    fireEvent.click(disagreeBtn);
+
+    // Confidence 75% -> High confidence negative -> Principled Dissent
+    expect(screen.getByTestId("stance-archetype-pill")).toHaveTextContent("Principled Dissent");
+
+    // Change confidence to 50% -> Mid confidence negative -> Grounded Skepticism
+    const slider = screen.getByLabelText(/Confidence gauge slider/i);
+    act(() => {
+      fireEvent.change(slider, { target: { value: "50" } });
+    });
+
+    expect(screen.getByTestId("stance-archetype-pill")).toHaveTextContent("Grounded Skepticism");
+    expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Standard Civic Stance");
+  });
+
+  it("calculates within-subject dynamic Z-score when historicalBaseline is provided", () => {
+    render(
+      <BivariatePollCard
+        pollId="test-poll-baseline"
+        questionText="Historical Baseline Test"
+        historicalBaseline={{ mean: 50, stddev: 10 }}
+      />
+    );
+
+    // Initial slider is 75%: (75 - 50) / 10 = +2.5 >= 1.5 -> Primary Personal Anchor
+    expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Primary Personal Anchor");
+
+    // Change slider to 55%: (55 - 50) / 10 = +0.5 < 1.5 and 55 < 85 -> Standard Civic Stance
+    const slider = screen.getByLabelText(/Confidence gauge slider/i);
+    act(() => {
+      fireEvent.change(slider, { target: { value: "55" } });
+    });
+
+    expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Standard Civic Stance");
+  });
 });

@@ -2,7 +2,7 @@ import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { extractSSOToken } from "@/lib/auth/ssoHandshake";
 
-export async function createClient() {
+export async function createClient(tokenOverride?: string | null) {
   const cookieStore = await cookies();
   const allCookies = cookieStore.getAll();
   const hasSupabaseSession = allCookies.some(
@@ -10,8 +10,13 @@ export async function createClient() {
   );
 
   // Let Supabase SSR supply its own session bearer when present; only attach
-  // separate SSO bearer when no native Supabase session exists.
-  const ssoToken = !hasSupabaseSession ? extractSSOToken(cookieStore) : null;
+  // separate SSO bearer when no native Supabase session exists or when explicitly overridden.
+  const ssoToken =
+    tokenOverride !== undefined
+      ? tokenOverride
+      : !hasSupabaseSession
+      ? extractSSOToken(cookieStore)
+      : null;
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

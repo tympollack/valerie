@@ -26,6 +26,15 @@ import type { LocaleGranularity, LocaleSentimentRecord } from "@/app/actions/val
 import { PremiseChallengeDrawer } from "@/components/valerie/PremiseChallengeDrawer"
 import { castVote, submitVote } from "@/app/actions/vote"
 import { flagPollWithCommitGate, type FlagReason } from "@/app/actions/valerieFlagActions"
+import {
+  getStanceArchetype,
+  getStanceArchetypeMeta,
+  getRelativeWeightDescriptor,
+  STANCE_BADGE_SPRING,
+  LIKERT_STEPS,
+  getConfidenceDescription,
+} from "@/lib/valerie/stanceNomenclature"
+import { parseQuestionWithTooltips } from "@/components/valerie/questionParser"
 import { cn } from "@/lib/utils"
 
 // =============================================================================
@@ -44,123 +53,8 @@ export interface BivariatePollCardProps {
   initialGranularity?: LocaleGranularity
   detectedLocales?: string[]
   targetLocaleCode?: string
-}
-
-const LIKERT_STEPS = [
-  { value: -2, label: "Strongly Disagree", short: "SD", activeColor: "bg-rose-500 text-white border-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.4)]", dotColor: "bg-rose-500", textColor: "text-rose-400", gradient: "from-rose-500 to-rose-600" },
-  { value: -1, label: "Disagree", short: "D", activeColor: "bg-amber-500 text-white border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.4)]", dotColor: "bg-amber-500", textColor: "text-amber-400", gradient: "from-amber-500 to-amber-600" },
-  { value: 0, label: "Neutral / Undecided", short: "N", activeColor: "bg-slate-600 text-white border-slate-500 shadow-[0_0_15px_rgba(100,116,139,0.4)]", dotColor: "bg-slate-400", textColor: "text-slate-300", gradient: "from-slate-500 to-slate-600" },
-  { value: 1, label: "Agree", short: "A", activeColor: "bg-emerald-500 text-white border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.4)]", dotColor: "bg-emerald-500", textColor: "text-emerald-400", gradient: "from-emerald-500 to-emerald-600" },
-  { value: 2, label: "Strongly Agree", short: "SA", activeColor: "bg-cyan-500 text-slate-950 border-cyan-300 shadow-[0_0_20px_rgba(6,182,212,0.6)] font-extrabold", dotColor: "bg-cyan-400", textColor: "text-cyan-400", gradient: "from-cyan-400 to-cyan-500" },
-]
-
-const KNOWN_GLOSSARY_TERMS = [
-  "pedestrian-only zone",
-  "congestion pricing",
-  "likert scale",
-  "commit-and-reveal period",
-  "commit-and-reveal",
-  "community sentiment",
-  "bivariate scoring",
-  "bivariate",
-  "heat map",
-  "carbon offset",
-  "ranked choice voting",
-  "zoning",
-  "gerrymandering",
-]
-
-/**
- * Parses raw text for bracketed [[term]] patterns or known civic keywords,
- * replacing them with interactive ValerieTooltip components.
- */
-function parseQuestionWithTooltips(text: string) {
-  if (!text) return null
-
-  // 1. Check for explicit bracketed syntax like [[pedestrian-only zone]]
-  const bracketRegex = /\[\[(.*?)\]\]/g
-  const parts: React.ReactNode[] = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  if (text.includes("[[")) {
-    while ((match = bracketRegex.exec(text)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push(text.substring(lastIndex, match.index))
-      }
-      const term = match[1]
-      parts.push(
-        <ValerieTooltip key={`bracket-${match.index}`} word={term}>
-          {term}
-        </ValerieTooltip>
-      )
-      lastIndex = match.index + match[0].length
-    }
-    if (lastIndex < text.length) {
-      parts.push(text.substring(lastIndex))
-    }
-    return <>{parts}</>
-  }
-
-  // 2. Automatic keyword extraction
-  const escapedTerms = KNOWN_GLOSSARY_TERMS.sort((a, b) => b.length - a.length)
-  const regex = new RegExp(`\\b(${escapedTerms.join("|")})\\b`, "gi")
-
-  const elements: React.ReactNode[] = []
-  let currIndex = 0
-  let keywordMatch: RegExpExecArray | null
-
-  while ((keywordMatch = regex.exec(text)) !== null) {
-    if (keywordMatch.index > currIndex) {
-      elements.push(text.substring(currIndex, keywordMatch.index))
-    }
-    const matchedTerm = keywordMatch[0]
-    elements.push(
-      <ValerieTooltip
-        key={`auto-${keywordMatch.index}`}
-        word={matchedTerm.toLowerCase()}
-      >
-        {matchedTerm}
-      </ValerieTooltip>
-    )
-    currIndex = keywordMatch.index + matchedTerm.length
-  }
-
-  if (currIndex < text.length) {
-    elements.push(text.substring(currIndex))
-  }
-
-  return <>{elements}</>
-}
-
-function getConfidenceDescription(val: number): {
-  label: string
-  tone: string
-  color: string
-} {
-  if (val >= 85)
-    return {
-      label: "Absolute Conviction",
-      tone: "High certainty backed by deep familiarity",
-      color: "text-cyan-400",
-    }
-  if (val >= 60)
-    return {
-      label: "Strong Certainty",
-      tone: "Confident perspective with firm reasoning",
-      color: "text-emerald-400",
-    }
-  if (val >= 35)
-    return {
-      label: "Moderate Lean",
-      tone: "Tending toward this stance, open to new information",
-      color: "text-amber-400",
-    }
-  return {
-    label: "Tentative / Unsure",
-    tone: "Intuitive guess or preliminary leaning",
-    color: "text-slate-400",
-  }
+  historicalZScore?: number | null
+  historicalBaseline?: { mean: number; stddev: number } | null
 }
 
 // =============================================================================
@@ -179,6 +73,8 @@ export function BivariatePollCard({
   initialGranularity,
   detectedLocales,
   targetLocaleCode,
+  historicalZScore,
+  historicalBaseline,
 }: BivariatePollCardProps) {
   // --- Form state
   const [likertScore, setLikertScore] = useState<number>(0)
@@ -215,6 +111,28 @@ export function BivariatePollCard({
     [confidenceScore]
   )
 
+  const stanceArchetype = useMemo(
+    () => getStanceArchetype(likertScore, confidenceScore),
+    [likertScore, confidenceScore]
+  )
+
+  const stanceMeta = useMemo(
+    () => getStanceArchetypeMeta(stanceArchetype),
+    [stanceArchetype]
+  )
+
+  const dynamicZScore = useMemo(() => {
+    if (historicalBaseline && historicalBaseline.stddev > 0) {
+      return (confidenceScore - historicalBaseline.mean) / historicalBaseline.stddev
+    }
+    return historicalZScore ?? null
+  }, [confidenceScore, historicalBaseline, historicalZScore])
+
+  const relativeWeightSubtitle = useMemo(
+    () => getRelativeWeightDescriptor(confidenceScore, dynamicZScore),
+    [confidenceScore, dynamicZScore]
+  )
+
   // Submit Handler
   const handleSubmit = useCallback(() => {
     setErrorMsg(null)
@@ -239,10 +157,17 @@ export function BivariatePollCard({
           setErrorMsg(result.error || "Failed to commit vote.")
         }
       } catch (err) {
-        const errorText =
+        let errorText =
           err instanceof Error
             ? err.message
             : "Failed to commit vote. Please try again."
+        if (
+          errorText.includes("Server Components render") ||
+          errorText.includes("digest")
+        ) {
+          errorText =
+            "An unexpected server error occurred while committing your vote. Please try again."
+        }
         setErrorMsg(errorText)
       }
     })
@@ -280,10 +205,17 @@ export function BivariatePollCard({
             setErrorMsg(result.error || "Failed to record premise challenge.")
           }
         } catch (err) {
-          const errorText =
+          let errorText =
             err instanceof Error
               ? err.message
               : "Failed to record premise challenge. Please try again."
+          if (
+            errorText.includes("Server Components render") ||
+            errorText.includes("digest")
+          ) {
+            errorText =
+              "An unexpected server error occurred while recording your challenge. Please try again."
+          }
           setErrorMsg(errorText)
         }
       })
@@ -337,6 +269,36 @@ export function BivariatePollCard({
         >
           {/* 1. Blind Voting Banner */}
           <RevealGate isSubmitted={false} />
+
+          {/* Dynamic Civic Stance Archetype Pill */}
+          <div className="flex h-14 items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/80 px-5 py-3 backdrop-blur-xl">
+            <div className="flex items-center gap-2">
+              <Compass className="h-4 w-4 text-cyan-400" />
+              <span className="text-xs font-semibold text-slate-300">
+                Civic Stance Archetype
+              </span>
+            </div>
+
+            <motion.div
+              layout
+              transition={STANCE_BADGE_SPRING}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-xs font-bold transition-all duration-200",
+                stanceMeta.badgeClassName
+              )}
+            >
+              <motion.span
+                key={stanceArchetype}
+                initial={{ opacity: 0, y: -2 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 2 }}
+                transition={{ duration: 0.15 }}
+                data-testid="stance-archetype-pill"
+              >
+                {stanceArchetype}
+              </motion.span>
+            </motion.div>
+          </div>
 
           {/* 2. Likert Scale Slider (-2 to +2) */}
           <div className="space-y-5 rounded-2xl border border-cyan-500/25 bg-slate-950/80 p-6 shadow-[0_0_25px_rgba(6,182,212,0.08)] backdrop-blur-xl">
@@ -691,6 +653,22 @@ export function BivariatePollCard({
               <span>Challenge Premise / Framing</span>
             </Button>
           </div>
+
+          {/* Contextual Subtitle Indicating Relative Weight */}
+          <p className="text-center text-xs font-medium text-slate-400">
+            Conviction Profile:{" "}
+            <span
+              className={cn(
+                "font-semibold",
+                relativeWeightSubtitle === "Primary Personal Anchor"
+                  ? "text-cyan-300"
+                  : "text-slate-300"
+              )}
+              data-testid="stance-relative-weight"
+            >
+              {relativeWeightSubtitle}
+            </span>
+          </p>
 
           <p className="text-center text-[11px] text-slate-400">
             Immutable cryptographic commit. Zero pre-vote herd bias. Community
