@@ -39,7 +39,7 @@ export interface VoteResult {
 
 export async function submitVote(payload: VotePayload): Promise<VoteResult> {
   try {
-    const supabase = await createClient();
+    let supabase = await createClient();
 
     // 1. Session & Auth Validation
     let user = null;
@@ -53,45 +53,31 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       authError = authCatchErr;
     }
 
-    // If Supabase SSR has no stored session cookie, check for Hub SSO token and validate it
+    // If Supabase SSR has no stored session cookie, check for Hub SSO token across cookies and authorization header
     if (!user) {
       try {
         const cookieStore = await cookies();
-        const ssoToken = extractSSOToken(cookieStore);
+        let ssoToken = extractSSOToken(cookieStore);
+
+        if (!ssoToken) {
+          const headerList = await headers();
+          const authHeader = headerList.get("authorization") || headerList.get("Authorization");
+          if (authHeader && authHeader.startsWith("Bearer ")) {
+            ssoToken = authHeader.slice(7).trim();
+          }
+        }
+
         if (ssoToken) {
           const { data: ssoData, error: ssoError } = await supabase.auth.getUser(ssoToken);
           if (!ssoError && ssoData?.user) {
             user = ssoData.user;
             authError = null;
+            // Bind verified bearer token directly to database client for RLS policy enforcement
+            supabase = await createClient(ssoToken);
           }
         }
       } catch (ssoCatchErr) {
         console.warn("[Project Valerie] SSO token extraction warning:", ssoCatchErr);
-      }
-    }
-
-    // Fallback: check downstream headers injected by middleware for authenticated SSO proxy
-    if (!user) {
-      try {
-        const headerList = await headers();
-        const headerUserId = headerList.get("x-user-id");
-        if (headerUserId) {
-          const isHumanVerified = headerList.get("x-is-human-verified") === "true";
-          const verificationTier = headerList.get("x-verification-tier") || "UNVERIFIED";
-          const trustState = headerList.get("x-trust-state") || "active";
-          user = {
-            id: headerUserId,
-            app_metadata: {
-              is_human: isHumanVerified,
-              verification_tier: verificationTier,
-              trust_state: trustState,
-            },
-            user_metadata: {},
-          } as any;
-          authError = null;
-        }
-      } catch {
-        // Non-request context
       }
     }
 
@@ -213,7 +199,6 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
 
     // 7. Revalidate cached rendering of the poll page
     try {
-      revalidatePath("/");
       if (pollId) {
         revalidatePath(`/polls/${pollId}`);
       }
@@ -233,10 +218,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     console.error("[Project Valerie] Unhandled exception in submitVote:", err);
     return {
       success: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Failed to commit vote. Please try again.",
+      error: "Failed to record your vote. Please try again.",
     };
   }
 }

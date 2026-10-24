@@ -245,7 +245,7 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe("Unexpected database connection crash");
+    expect(result.error).toBe("Failed to record your vote. Please try again.");
   });
 
   it("safely falls back to 24h lockedUntil when data.locked_until is null", async () => {
@@ -265,15 +265,39 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     expect(new Date(result.lockedUntil!).getTime()).toBeGreaterThan(Date.now());
   });
 
-  it("authenticates via middleware headers when direct Supabase SSR session is missing", async () => {
+  it("authenticates via Authorization bearer header when direct session cookie is missing", async () => {
     mockUser = null;
     mockGetHeader.mockImplementation((name: string) => {
-      if (name === "x-user-id") return "usr-middleware-header-99";
-      if (name === "x-is-human-verified") return "true";
-      if (name === "x-verification-tier") return "COMMUNITY_VERIFIED";
-      if (name === "x-trust-state") return "active";
+      if (name === "authorization" || name === "Authorization") return "Bearer test-sso-jwt-token";
       return null;
     });
+
+    // When getUser is called with the bearer token, return the authenticated user
+    const bearerUser = {
+      id: "usr-bearer-token-99",
+      app_metadata: {
+        is_human: true,
+        verification_tier: "COMMUNITY_VERIFIED",
+        trust_state: "active",
+      },
+      user_metadata: {},
+    };
+
+    const { createClient } = await import("@/lib/supabase/server");
+    vi.mocked(createClient).mockImplementation(async (token?: string | null) => ({
+      auth: {
+        getUser: vi.fn(async (t?: string) => {
+          if (t === "test-sso-jwt-token" || token === "test-sso-jwt-token") {
+            return { data: { user: bearerUser }, error: null };
+          }
+          return { data: { user: null }, error: new Error("Not signed in") };
+        }),
+      },
+      schema: mockSchema,
+      functions: {
+        invoke: mockInvoke,
+      },
+    } as any));
 
     const result = await castVote({
       pollId: "poll-uuid-10",
@@ -282,6 +306,6 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(capturedInsertPayload.user_id).toBe("usr-middleware-header-99");
+    expect(capturedInsertPayload.user_id).toBe("usr-bearer-token-99");
   });
 });

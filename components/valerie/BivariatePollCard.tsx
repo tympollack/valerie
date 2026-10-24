@@ -248,7 +248,7 @@ export function BivariatePollCard({
           errorText.includes("digest")
         ) {
           errorText =
-            "Single-human identity verification required. Please complete verification on the SunShade Hub."
+            "An unexpected server error occurred while committing your vote. Please try again."
         }
         setErrorMsg(errorText)
       }
@@ -296,7 +296,7 @@ export function BivariatePollCard({
             errorText.includes("digest")
           ) {
             errorText =
-              "Single-human identity verification required. Please complete verification on the SunShade Hub."
+              "An unexpected server error occurred while recording your challenge. Please try again."
           }
           setErrorMsg(errorText)
         }
