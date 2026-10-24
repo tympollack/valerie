@@ -54,6 +54,7 @@ export interface BivariatePollCardProps {
   detectedLocales?: string[]
   targetLocaleCode?: string
   historicalZScore?: number | null
+  historicalBaseline?: { mean: number; stddev: number } | null
 }
 
 // =============================================================================
@@ -73,6 +74,7 @@ export function BivariatePollCard({
   detectedLocales,
   targetLocaleCode,
   historicalZScore,
+  historicalBaseline,
 }: BivariatePollCardProps) {
   // --- Form state
   const [likertScore, setLikertScore] = useState<number>(0)
@@ -119,9 +121,16 @@ export function BivariatePollCard({
     [stanceArchetype]
   )
 
+  const dynamicZScore = useMemo(() => {
+    if (historicalBaseline && historicalBaseline.stddev > 0) {
+      return (confidenceScore - historicalBaseline.mean) / historicalBaseline.stddev
+    }
+    return historicalZScore ?? null
+  }, [confidenceScore, historicalBaseline, historicalZScore])
+
   const relativeWeightSubtitle = useMemo(
-    () => getRelativeWeightDescriptor(confidenceScore, historicalZScore),
-    [confidenceScore, historicalZScore]
+    () => getRelativeWeightDescriptor(confidenceScore, dynamicZScore),
+    [confidenceScore, dynamicZScore]
   )
 
   // Submit Handler

@@ -31,6 +31,7 @@ export default async function Page() {
     related_ecosystem_refs?: Record<string, unknown> | null
   } | null = null
   let historicalZScore: number | null = null
+  let historicalBaseline: { mean: number; stddev: number } | null = null
 
   try {
     const supabase = await createClient()
@@ -52,7 +53,7 @@ export default async function Page() {
         .schema("valerie")
         .rpc("calculate_user_stance_metrics", {
           p_user_id: userContext.userId,
-          p_confidence: 85,
+          p_confidence: 75,
         })
       if (
         Array.isArray(metrics) &&
@@ -60,6 +61,15 @@ export default async function Page() {
         typeof metrics[0].z_score === "number"
       ) {
         historicalZScore = metrics[0].z_score
+        if (
+          typeof metrics[0].historical_mean === "number" &&
+          typeof metrics[0].historical_stddev === "number"
+        ) {
+          historicalBaseline = {
+            mean: metrics[0].historical_mean,
+            stddev: metrics[0].historical_stddev,
+          }
+        }
       }
     }
   } catch {
@@ -132,6 +142,7 @@ export default async function Page() {
               detectedLocales={activePoll.detected_locales ?? undefined}
               targetLocaleCode={activePoll.target_locale_code ?? undefined}
               historicalZScore={historicalZScore}
+              historicalBaseline={historicalBaseline}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800/80 bg-slate-950/80 p-8 text-center backdrop-blur-xl space-y-4 shadow-[0_0_25px_rgba(6,182,212,0.05)]">

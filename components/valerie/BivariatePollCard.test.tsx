@@ -324,4 +324,25 @@ describe("BivariatePollCard Component", () => {
     expect(screen.getByTestId("stance-archetype-pill")).toHaveTextContent("Grounded Skepticism");
     expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Standard Civic Stance");
   });
+
+  it("calculates within-subject dynamic Z-score when historicalBaseline is provided", () => {
+    render(
+      <BivariatePollCard
+        pollId="test-poll-baseline"
+        questionText="Historical Baseline Test"
+        historicalBaseline={{ mean: 50, stddev: 10 }}
+      />
+    );
+
+    // Initial slider is 75%: (75 - 50) / 10 = +2.5 >= 1.5 -> Primary Personal Anchor
+    expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Primary Personal Anchor");
+
+    // Change slider to 55%: (55 - 50) / 10 = +0.5 < 1.5 and 55 < 85 -> Standard Civic Stance
+    const slider = screen.getByLabelText(/Confidence gauge slider/i);
+    act(() => {
+      fireEvent.change(slider, { target: { value: "55" } });
+    });
+
+    expect(screen.getByTestId("stance-relative-weight")).toHaveTextContent("Standard Civic Stance");
+  });
 });
