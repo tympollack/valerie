@@ -17,9 +17,31 @@ import {
 export type { VotePayload, VoteResult };
 
 export async function submitVote(payload: VotePayload): Promise<VoteResult> {
-  return executeSubmitVote(payload);
+  try {
+    return await executeSubmitVote(payload);
+  } catch (err: unknown) {
+    console.error("[Project Valerie] Error proxying submitVote:", err);
+    return {
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to commit vote. Please try again.",
+    };
+  }
 }
 
 export async function castVote(payload: VotePayload): Promise<VoteResult> {
-  return executeSubmitVote(payload);
+  try {
+    return await executeSubmitVote(payload);
+  } catch (err: unknown) {
+    console.error("[Project Valerie] Error proxying castVote:", err);
+    return {
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : "Failed to commit vote. Please try again.",
+    };
+  }
 }

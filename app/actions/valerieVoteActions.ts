@@ -13,7 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
 import { resolveVoterLocale } from "@/lib/geo/resolveVoterLocale";
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 // ---------------------------------------------------------------------------
 // Public types — imported by BivariatePollCard, VotingCard, and consumers
@@ -38,139 +38,189 @@ export interface VoteResult {
 // ---------------------------------------------------------------------------
 
 export async function submitVote(payload: VotePayload): Promise<VoteResult> {
-  const supabase = await createClient();
+  try {
+    let supabase = await createClient();
 
-  // 1. Session & Auth Validation
-  let {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+    // 1. Session & Auth Validation
+    let user = null;
+    let authError = null;
 
-  // If Supabase SSR has no stored session cookie, check for Hub SSO token and validate it
-  if (!user) {
-    const cookieStore = await cookies();
-    const ssoToken = extractSSOToken(cookieStore);
-    if (ssoToken) {
-      const { data: ssoData, error: ssoError } = await supabase.auth.getUser(ssoToken);
-      if (!ssoError && ssoData?.user) {
-        user = ssoData.user;
-        authError = null;
+    try {
+      const authRes = await supabase.auth.getUser();
+      user = authRes.data?.user || null;
+      authError = authRes.error;
+    } catch (authCatchErr) {
+      authError = authCatchErr;
+    }
+
+    // If Supabase SSR has no stored session cookie, check for Hub SSO token across cookies and authorization header
+    if (!user) {
+      try {
+        const cookieStore = await cookies();
+        let ssoToken = extractSSOToken(cookieStore);
+
+        if (!ssoToken) {
+          const headerList = await headers();
+          const authHeader = headerList.get("authorization") || headerList.get("Authorization");
+          if (authHeader && authHeader.startsWith("Bearer ")) {
+            ssoToken = authHeader.slice(7).trim();
+          }
+        }
+
+        if (ssoToken) {
+          const { data: ssoData, error: ssoError } = await supabase.auth.getUser(ssoToken);
+          if (!ssoError && ssoData?.user) {
+            user = ssoData.user;
+            authError = null;
+            // Bind verified bearer token directly to database client for RLS policy enforcement
+            supabase = await createClient(ssoToken);
+          }
+        }
+      } catch (ssoCatchErr) {
+        console.warn("[Project Valerie] SSO token extraction warning:", ssoCatchErr);
       }
     }
-  }
 
-  if (authError || !user) {
-    return { success: false, error: "You must be signed in to vote." };
-  }
+    if (authError || !user) {
+      return { success: false, error: "You must be signed in to vote." };
+    }
 
-  const antiSybilProof = extractAntiSybilProof(user);
-  const isHuman = antiSybilProof.isHuman;
-  const trustState = antiSybilProof.trustState;
+    const antiSybilProof = extractAntiSybilProof(user);
+    const userAppMeta = (user.app_metadata as Record<string, unknown>) || {};
+    const userMetadata = (user.user_metadata as Record<string, unknown>) || {};
 
-  // 2. Anti-Sybil Verification check (Defense-in-depth before DB RLS hard gate)
-  if (!isHuman || trustState !== "active") {
+    const isHumanVerified = Boolean(
+      antiSybilProof.isHuman ||
+        antiSybilProof.antiSybilVerified ||
+        userAppMeta.is_human_verified === true ||
+        userMetadata.is_human_verified === true
+    );
+
+    // 2. Anti-Sybil Verification check (Defense-in-depth before DB RLS hard gate)
+    if (!isHumanVerified || antiSybilProof.trustState !== "active") {
+      return {
+        success: false,
+        error: "Single-human identity verification required. Please complete verification on the SunShade Hub.",
+      };
+    }
+
+    const resolvedUserId = user.id;
+    const { pollId, likertScore, confidenceScore, comment, h3HexIndex } = payload;
+
+    // 3. Server-side validation
+    if (!pollId || typeof pollId !== "string") {
+      return { success: false, error: "Poll ID is required." };
+    }
+
+    if (
+      !Number.isInteger(likertScore) ||
+      likertScore < -2 ||
+      likertScore > 2
+    ) {
+      return { success: false, error: "Invalid sentiment score." };
+    }
+
+    if (
+      !Number.isInteger(confidenceScore) ||
+      confidenceScore < 0 ||
+      confidenceScore > 100
+    ) {
+      return { success: false, error: "Invalid confidence score." };
+    }
+
+    // 4. Resolve coarse-to-fine locale buckets (Zero raw coordinates)
+    const locale = await resolveVoterLocale(undefined, user);
+    const finalH3Res7 = locale.h3_res7 ?? h3HexIndex ?? null;
+
+    // 5. Insert into valerie.poll_responses
+    const { data, error: insertError } = await supabase
+      .schema("valerie")
+      .from("poll_responses")
+      .insert({
+        poll_id:          pollId,
+        user_id:          resolvedUserId,
+        likert_score:     likertScore,
+        confidence_score: confidenceScore,
+        comment:          comment?.trim() || null,
+        h3_hex_index:     finalH3Res7,
+        country_iso:      locale.country_iso,
+        admin1_code:      locale.admin1_code,
+        admin2_code:      locale.admin2_code,
+        h3_res7:          finalH3Res7,
+        // locked_until is intentionally NOT set here — the DB default
+        // (NOW() + INTERVAL '24 hours') owns this value to prevent tampering.
+      })
+      .select("id, locked_until")
+      .single();
+
+    if (insertError) {
+      // PostgreSQL error code 23505 = unique_violation
+      if (insertError.code === "23505") {
+        return {
+          success: false,
+          error: "You have already voted on this poll. Each account may vote once.",
+        };
+      }
+
+      // PostgreSQL error code 42501 = insufficient_privilege (RLS policy check failed)
+      if (insertError.code === "42501") {
+        return {
+          success: false,
+          error: "Vote rejected: Your account must have active human verification.",
+        };
+      }
+
+      console.error("[Project Valerie] Vote insert failed:", insertError);
+      return {
+        success: false,
+        error: "Failed to record your vote. Please try again.",
+      };
+    }
+
+    // 6. Dynamic Topic Clustering Trigger (Asynchronous Post-Commit)
+    try {
+      supabase.functions
+        .invoke("valerie-cluster-engine", {
+          body: {
+            poll_id:          pollId,
+            response_id:      data?.id,
+            user_id:          resolvedUserId,
+            likert_score:     likertScore,
+            confidence_score: confidenceScore,
+            comment:          comment?.trim() || undefined,
+          },
+        })
+        .catch((err: unknown) => {
+          console.warn("[Project Valerie] Background cluster invocation non-blocking warning:", err);
+        });
+    } catch (invokeErr) {
+      console.warn("[Project Valerie] Cluster invocation trigger warning:", invokeErr);
+    }
+
+    // 7. Revalidate cached rendering of the poll page
+    try {
+      if (pollId) {
+        revalidatePath(`/polls/${pollId}`);
+      }
+    } catch (revalErr) {
+      console.warn("[Project Valerie] Non-blocking revalidation warning:", revalErr);
+    }
+
+    const lockedUntil =
+      data?.locked_until ||
+      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
     return {
-      success: false,
-      error: "Single-human identity verification required. Please complete verification on the SunShade Hub.",
+      success:     true,
+      lockedUntil,
     };
-  }
-
-  const resolvedUserId = user.id;
-  const { pollId, likertScore, confidenceScore, comment, h3HexIndex } = payload;
-
-  // 3. Server-side validation
-  if (!pollId || typeof pollId !== "string") {
-    return { success: false, error: "Poll ID is required." };
-  }
-
-  if (
-    !Number.isInteger(likertScore) ||
-    likertScore < -2 ||
-    likertScore > 2
-  ) {
-    return { success: false, error: "Invalid sentiment score." };
-  }
-
-  if (
-    !Number.isInteger(confidenceScore) ||
-    confidenceScore < 0 ||
-    confidenceScore > 100
-  ) {
-    return { success: false, error: "Invalid confidence score." };
-  }
-
-  // 4. Resolve coarse-to-fine locale buckets (Zero raw coordinates)
-  const locale = await resolveVoterLocale(undefined, user);
-  const finalH3Res7 = locale.h3_res7 ?? h3HexIndex ?? null;
-
-  // 5. Insert into valerie.poll_responses
-  const { data, error: insertError } = await supabase
-    .schema("valerie")
-    .from("poll_responses")
-    .insert({
-      poll_id:          pollId,
-      user_id:          resolvedUserId,
-      likert_score:     likertScore,
-      confidence_score: confidenceScore,
-      comment:          comment?.trim() || null,
-      h3_hex_index:     finalH3Res7,
-      country_iso:      locale.country_iso,
-      admin1_code:      locale.admin1_code,
-      admin2_code:      locale.admin2_code,
-      h3_res7:          finalH3Res7,
-      // locked_until is intentionally NOT set here — the DB default
-      // (NOW() + INTERVAL '24 hours') owns this value to prevent tampering.
-    })
-    .select("id, locked_until")
-    .single();
-
-  if (insertError) {
-    // PostgreSQL error code 23505 = unique_violation
-    if (insertError.code === "23505") {
-      return {
-        success: false,
-        error: "You have already voted on this poll. Each account may vote once.",
-      };
-    }
-
-    // PostgreSQL error code 42501 = insufficient_privilege (RLS policy check failed)
-    if (insertError.code === "42501") {
-      return {
-        success: false,
-        error: "Vote rejected: Your account must have active human verification.",
-      };
-    }
-
-    console.error("[Project Valerie] Vote insert failed:", insertError);
+  } catch (err: unknown) {
+    console.error("[Project Valerie] Unhandled exception in submitVote:", err);
     return {
       success: false,
       error: "Failed to record your vote. Please try again.",
     };
   }
-
-  // 6. Dynamic Topic Clustering Trigger (Asynchronous Post-Commit)
-  supabase.functions
-    .invoke("valerie-cluster-engine", {
-      body: {
-        poll_id:          pollId,
-        response_id:      data?.id,
-        user_id:          resolvedUserId,
-        likert_score:     likertScore,
-        confidence_score: confidenceScore,
-        comment:          comment?.trim() || undefined,
-      },
-    })
-    .catch((err: unknown) => {
-      console.warn("[Project Valerie] Background cluster invocation non-blocking warning:", err);
-    });
-
-  // 7. Revalidate cached rendering of the poll page
-  revalidatePath(`/polls/${pollId}`);
-
-  return {
-    success:     true,
-    lockedUntil: data.locked_until,
-  };
 }
 
 /**
