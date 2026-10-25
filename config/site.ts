@@ -31,7 +31,7 @@ export const siteConfig: SiteConfig = {
   tagline: "The Civic Consensus Engine",
   description:
     "Deliberative civic consensus engine featuring sealed bivariate commit protocols, anti-Sybil human attestation, and anti-bandwagoning truth discovery.",
-  url: process.env.NEXT_PUBLIC_APP_URL || "https://votary.sunshade.me",
+  url: process.env.NEXT_PUBLIC_APP_URL || "https://valerie.sunshade.icu",
   ogImage: "/og.png",
   links: {
     github: "https://github.com/tympollack/valerie",

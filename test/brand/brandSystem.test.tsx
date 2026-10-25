@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen } from "@testing-library/react"
+import fs from "node:fs"
+import path from "node:path"
 import { siteConfig } from "@/config/site"
 import { VotaryEmblem } from "@/components/brand/VotaryEmblem"
 import { Header } from "@/components/nav/Header"
@@ -43,8 +45,15 @@ describe("Brand System & Design Alignment (STORY-VAL-BRAND-VOTARY)", () => {
       expect(siteConfig.tagline).toBe("The Civic Consensus Engine")
       expect(siteConfig.description).toMatch(/Anti-Sybil/i)
       expect(siteConfig.description).toMatch(/deliberative/i)
+      expect(siteConfig.url).toContain(".sunshade.icu")
       expect(siteConfig.telemetry.system).toBe("SunShade")
       expect(siteConfig.telemetry.kernel).toBe("Project Valerie")
+
+      // Verify social preview image exists on disk
+      const ogPath = path.resolve(process.cwd(), "public", "og.png")
+      expect(fs.existsSync(ogPath)).toBe(true)
+      const stat = fs.statSync(ogPath)
+      expect(stat.size).toBeGreaterThan(1000)
     })
 
     it("exports layout metadata with correct title and OpenGraph configuration", () => {
@@ -108,6 +117,20 @@ describe("Brand System & Design Alignment (STORY-VAL-BRAND-VOTARY)", () => {
       )
 
       expect(screen.getByText("Back to Polls")).toBeDefined()
+    })
+
+    it("renders compact brand typography when showBackButton is enabled on narrow screens", () => {
+      render(
+        <Header
+          showBackButton
+          backButtonHref="/"
+          backButtonLabel="Back to Deliberation"
+        />
+      )
+
+      expect(screen.getByText("Back to Deliberation")).toBeDefined()
+      const titleSpan = screen.getByText("The Votary")
+      expect(titleSpan.className).toContain("hidden sm:inline")
     })
   })
 })
