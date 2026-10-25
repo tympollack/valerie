@@ -84,6 +84,73 @@ const jsonResponse = (body: unknown, status = 200): Response =>
     headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
   });
 
+interface CachedHeraldSettings {
+  cynicBiasThreshold: number;
+  semanticDedupThreshold: number;
+  controversyThreshold: number;
+  cachedAt: number;
+}
+
+let heraldSettingsCache: CachedHeraldSettings | null = null;
+const HERALD_SETTINGS_CACHE_TTL_MS = 60_000;
+
+/**
+ * Loads dynamic thresholds from valerie.system_settings with 60-second in-memory caching.
+ */
+export async function getHeraldDynamicSettings(supabaseClient?: any): Promise<{
+  cynicBiasThreshold: number;
+  semanticDedupThreshold: number;
+  controversyThreshold: number;
+}> {
+  const now = Date.now();
+  if (heraldSettingsCache && now - heraldSettingsCache.cachedAt < HERALD_SETTINGS_CACHE_TTL_MS) {
+    return heraldSettingsCache;
+  }
+
+  let cynicBiasThreshold = 0.15;
+  let semanticDedupThreshold = 0.90;
+  let controversyThreshold = 0.27;
+
+  if (supabaseClient) {
+    try {
+      const { data, error } = await supabaseClient
+        .schema("valerie")
+        .from("system_settings")
+        .select("key, value")
+        .in("key", [
+          "cynic_bias_threshold",
+          "herald_cynic_bias_threshold",
+          "semantic_dedup_threshold",
+          "herald_semantic_dedup_threshold",
+          "controversy_threshold",
+          "herald_controversy_threshold",
+        ]);
+
+      if (!error && Array.isArray(data)) {
+        for (const row of data) {
+          const num = typeof row.value === "number" ? row.value : parseFloat(String(row.value));
+          if (!isNaN(num)) {
+            if (row.key.includes("cynic")) cynicBiasThreshold = num;
+            if (row.key.includes("dedup") || row.key.includes("semantic")) semanticDedupThreshold = num;
+            if (row.key.includes("controversy")) controversyThreshold = num;
+          }
+        }
+      }
+    } catch {
+      // Return safe defaults on error
+    }
+  }
+
+  heraldSettingsCache = {
+    cynicBiasThreshold,
+    semanticDedupThreshold,
+    controversyThreshold,
+    cachedAt: now,
+  };
+
+  return heraldSettingsCache;
+}
+
 /**
  * Calculates cross-source sentiment variance (dispersion) across multiple coverage perspectives.
  */
@@ -328,14 +395,15 @@ export async function agent2CynicReferee(
 
 /**
  * Runs the Adversarial Referee Loop between Agent 1 and Agent 2.
- * Enforces cynic_bias_score < 0.15 with up to 2 rewrites.
+ * Enforces cynic_bias_score < cynicBiasThreshold with up to 2 rewrites.
  */
 export async function runAdversarialRefereePipeline(
   headline: string,
   summary: string,
   openaiApiKey?: string,
   scopeTier: "LOCAL" | "STATE" | "NATIONAL" | "GLOBAL" = "NATIONAL",
-  detectedLocales: string[] = ["US"]
+  detectedLocales: string[] = ["US"],
+  cynicBiasThreshold = 0.15
 ): Promise<{ passed: boolean; axes: DecomposedAxis[]; rejectedReason?: string }> {
   // Step 1: Agent 1 initial decomposition
   const axes = await agent1DecomposeEvent(
@@ -353,8 +421,8 @@ export async function runAdversarialRefereePipeline(
     let attempts = 1;
     let audit = await agent2CynicReferee(axis.question_text, openaiApiKey);
 
-    // If score >= 0.15, force rewrite up to 2 times
-    while (audit.cynic_bias_score >= 0.15 && attempts <= 2) {
+    // If score >= cynicBiasThreshold, force rewrite up to 2 times
+    while (audit.cynic_bias_score >= cynicBiasThreshold && attempts <= 2) {
       attempts++;
       const revisedAxes = await agent1DecomposeEvent(
         headline,
@@ -376,11 +444,11 @@ export async function runAdversarialRefereePipeline(
     axis.cynic_feedback = audit.feedback;
     axis.attempts = attempts;
 
-    if (audit.cynic_bias_score >= 0.15) {
+    if (audit.cynic_bias_score >= cynicBiasThreshold) {
       return {
         passed: false,
         axes,
-        rejectedReason: `Axis ${axis.category} failed cynic audit after ${attempts} attempts (score: ${audit.cynic_bias_score.toFixed(3)} >= 0.15): ${audit.feedback}`,
+        rejectedReason: `Axis ${axis.category} failed cynic audit after ${attempts} attempts (score: ${audit.cynic_bias_score.toFixed(3)} >= ${cynicBiasThreshold}): ${audit.feedback}`,
       };
     }
   }
@@ -397,7 +465,8 @@ export async function runAdversarialRefereePipeline(
 export async function checkSemanticDeduplication(
   eventEmbedding: number[],
   supabase?: any,
-  excludeIngestId?: string
+  excludeIngestId?: string,
+  threshold = 0.90
 ): Promise<{ isDuplicate: boolean; duplicateId?: string; existingUrls?: string[]; clusterId?: string }> {
   if (!supabase) {
     return { isDuplicate: false };
@@ -432,7 +501,7 @@ export async function checkSemanticDeduplication(
         }
 
         const sim = cosineSimilarity(eventEmbedding, rowVec);
-        if (sim > 0.90) {
+        if (sim > threshold) {
           const urls = Array.isArray(row.source_urls) ? row.source_urls : [];
           return {
             isDuplicate: true,
@@ -467,7 +536,7 @@ export async function checkSemanticDeduplication(
         }
 
         const sim = cosineSimilarity(eventEmbedding, clusterVec);
-        if (sim > 0.90) {
+        if (sim > threshold) {
           return {
             isDuplicate: true,
             clusterId: cluster.id,
@@ -497,8 +566,11 @@ export async function processHeraldIngest(
   const supabase = options?.supabase;
   const ingestId = options?.existingIngestId || crypto.randomUUID();
 
+  // Load dynamic runtime thresholds from valerie.system_settings
+  const dynamicSettings = await getHeraldDynamicSettings(supabase);
+
   // 1. Controversy Dispersion Check
-  if (cluster.controversy_dispersion < 0.27) {
+  if (cluster.controversy_dispersion < dynamicSettings.controversyThreshold) {
     if (supabase && options?.existingIngestId && !options?.dryRun) {
       await supabase
         .schema("valerie")
@@ -506,7 +578,7 @@ export async function processHeraldIngest(
         .update({
           status: "skipped_low_controversy",
           metadata: {
-            reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.27 threshold.`,
+            reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required ${dynamicSettings.controversyThreshold} threshold.`,
             evaluated_at: new Date().toISOString(),
           },
         })
@@ -518,7 +590,7 @@ export async function processHeraldIngest(
       headline: cluster.headline,
       status: "skipped_low_controversy",
       controversy_dispersion: cluster.controversy_dispersion,
-      reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required 0.27 threshold.`,
+      reason: `Controversy dispersion (${cluster.controversy_dispersion.toFixed(3)}) is below the required ${dynamicSettings.controversyThreshold} threshold.`,
     };
   }
 
@@ -527,8 +599,13 @@ export async function processHeraldIngest(
   const eventEmbedding = await getEventEmbedding(coreEventText, options?.openaiApiKey);
   const sourceUrls = cluster.sources.map((s) => s.url);
 
-  // 3. Semantic Deduplication (pgvector similarity > 0.90 within 72h or against active clusters)
-  const deduplication = await checkSemanticDeduplication(eventEmbedding, supabase, options?.existingIngestId);
+  // 3. Semantic Deduplication (pgvector similarity > threshold within 72h or against active clusters)
+  const deduplication = await checkSemanticDeduplication(
+    eventEmbedding,
+    supabase,
+    options?.existingIngestId,
+    dynamicSettings.semanticDedupThreshold
+  );
   if (deduplication.isDuplicate) {
     const dupId = deduplication.duplicateId || deduplication.clusterId;
     if (supabase && !options?.dryRun) {
@@ -577,7 +654,7 @@ export async function processHeraldIngest(
       status: "merged_duplicate",
       controversy_dispersion: cluster.controversy_dispersion,
       duplicate_of_id: dupId,
-      reason: `Merged as duplicate of existing ingest or cluster ${dupId} (cosine similarity > 0.90).`,
+      reason: `Merged as duplicate of existing ingest or cluster ${dupId} (cosine similarity > ${dynamicSettings.semanticDedupThreshold}).`,
     };
   }
 
@@ -638,7 +715,8 @@ export async function processHeraldIngest(
     cluster.summary,
     options?.openaiApiKey,
     cluster.scope_tier,
-    cluster.detected_locales
+    cluster.detected_locales,
+    dynamicSettings.cynicBiasThreshold
   );
 
   if (!pipeline.passed) {

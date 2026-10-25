@@ -89,6 +89,22 @@ const DEFAULT_FALLBACK_SETTINGS: SystemSettingItem[] = [
     is_secret: false,
     updated_at: new Date().toISOString(),
   },
+  {
+    key: "herald_cynic_bias_threshold",
+    value: 0.15,
+    description: "Cynic Referee bias rejection threshold for adversarial IRT decomposition",
+    category: "AI_BIAS",
+    is_secret: false,
+    updated_at: new Date().toISOString(),
+  },
+  {
+    key: "herald_semantic_dedup_threshold",
+    value: 0.90,
+    description: "Cosine similarity cutoff for automated news ingest deduplication",
+    category: "AI_BIAS",
+    is_secret: false,
+    updated_at: new Date().toISOString(),
+  },
 ];
 
 /**
@@ -231,6 +247,20 @@ export async function updateSystemSetting(
         return {
           success: false,
           error: "Default digest item limit must be an integer between 1 and 50.",
+        };
+      }
+    } else if (key === "herald_cynic_bias_threshold") {
+      if (typeof value !== "number" || isNaN(value) || value < 0.05 || value > 0.50) {
+        return {
+          success: false,
+          error: "Herald cynic bias threshold must be between 0.05 and 0.50.",
+        };
+      }
+    } else if (key === "herald_semantic_dedup_threshold") {
+      if (typeof value !== "number" || isNaN(value) || value < 0.50 || value > 0.99) {
+        return {
+          success: false,
+          error: "Herald semantic deduplication threshold must be between 0.50 and 0.99.",
         };
       }
     }
