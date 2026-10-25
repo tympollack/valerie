@@ -78,9 +78,13 @@ export function AdminSettingsView({
 
   const handleValueChange = (key: string, rawVal: string, origVal: unknown) => {
     let parsed: unknown = rawVal;
-    if (typeof origVal === "number" || !isNaN(Number(rawVal)) && rawVal.trim() !== "") {
-      const num = Number(rawVal);
-      if (!isNaN(num)) parsed = num;
+    if (typeof origVal === "number") {
+      if (rawVal.trim() === "") {
+        parsed = "";
+      } else {
+        const num = Number(rawVal);
+        if (!isNaN(num)) parsed = num;
+      }
     }
     setEditedValues((prev) => ({ ...prev, [key]: parsed }));
   };
@@ -88,6 +92,17 @@ export function AdminSettingsView({
   const handleSaveSetting = (key: string) => {
     const valueToSave = editedValues[key];
     if (valueToSave === undefined) return;
+
+    const originalSetting = settings.find((s) => s.key === key);
+    if (typeof originalSetting?.value === "number") {
+      if (typeof valueToSave !== "number" || isNaN(valueToSave)) {
+        setStatusMessage({
+          type: "error",
+          text: `Setting "${key}" requires a valid numeric value.`,
+        });
+        return;
+      }
+    }
 
     setStatusMessage(null);
     startTransition(async () => {
@@ -189,6 +204,9 @@ export function AdminSettingsView({
               {categorySettings.map((setting) => {
                 const isDirty = editedValues[setting.key] !== undefined;
                 const currentValue = isDirty ? editedValues[setting.key] : setting.value;
+                const isNumericInvalid =
+                  typeof setting.value === "number" &&
+                  (typeof currentValue !== "number" || isNaN(currentValue));
 
                 return (
                   <div
@@ -230,7 +248,7 @@ export function AdminSettingsView({
                         <>
                           <button
                             type="button"
-                            disabled={isPending}
+                            disabled={isPending || isNumericInvalid}
                             onClick={() => handleSaveSetting(setting.key)}
                             aria-label={`Save ${setting.key}`}
                             className="inline-flex items-center gap-1 rounded-lg bg-cyan-600 px-2.5 py-1.5 text-xs font-semibold text-slate-950 hover:bg-cyan-500 disabled:opacity-50 transition-colors"

@@ -8,6 +8,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserContext } from "@/app/actions/auth";
+import { getDynamicSettingNumeric } from "@/app/actions/valerieSettingsActions";
 import { DigestPayload, parseDigestPayload } from "@/lib/valerie/digestEngine";
 
 export interface FetchDigestOptions {
@@ -23,8 +24,16 @@ export async function getPersonalizedDigest(
   options?: FetchDigestOptions
 ): Promise<{ success: boolean; data: DigestPayload; error?: string }> {
   try {
-    const rawLimit = options?.limit ?? 5;
-    const boundedLimit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 5, 1), 20);
+    let defaultLimit = 5;
+    if (options?.limit === undefined) {
+      try {
+        defaultLimit = await getDynamicSettingNumeric("digest_default_limit", 5);
+      } catch {
+        defaultLimit = 5;
+      }
+    }
+    const rawLimit = options?.limit ?? defaultLimit;
+    const boundedLimit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : defaultLimit, 1), 20);
 
     const userContext = await getCurrentUserContext().catch(() => null);
 

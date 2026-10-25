@@ -128,4 +128,15 @@ describe("AdminSettingsView Component", () => {
 
     expect(screen.queryByText("Unsaved")).not.toBeInTheDocument();
   });
+
+  it("disables save button when a numeric input is cleared", () => {
+    render(<AdminSettingsView initialSettings={mockSettings} userContext={adminUser} />);
+
+    const input = screen.getByLabelText(/Setting voting_lock_hours/i);
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+    const saveBtn = screen.getByLabelText(/Save voting_lock_hours/i);
+    expect(saveBtn).toBeDisabled();
+  });
 });

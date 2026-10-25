@@ -111,9 +111,14 @@ export async function getSystemSettings(): Promise<FetchSettingsResult> {
       .rpc("get_all_system_settings");
 
     if (!rpcError && Array.isArray(rawRpcData)) {
+      let data = rawRpcData as SystemSettingItem[];
+      // Defend against unprivileged leaking of secret configurations
+      if (!isPrivileged) {
+        data = data.filter((s) => !s.is_secret);
+      }
       return {
         success: true,
-        data: rawRpcData as SystemSettingItem[],
+        data,
       };
     }
 
@@ -143,9 +148,13 @@ export async function getSystemSettings(): Promise<FetchSettingsResult> {
     }
 
     // 3. Fallback to default constants if database is not migrated yet
+    const fallbackSettings = isPrivileged
+      ? DEFAULT_FALLBACK_SETTINGS
+      : DEFAULT_FALLBACK_SETTINGS.filter((s) => !s.is_secret);
+
     return {
       success: true,
-      data: DEFAULT_FALLBACK_SETTINGS,
+      data: fallbackSettings,
     };
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -160,7 +169,7 @@ export async function getSystemSettings(): Promise<FetchSettingsResult> {
 
 /**
  * Updates a dynamic runtime system setting.
- * Dispatches to valerie.update_system_setting RPC with authorization guard.
+ * Dispatches to valerie.update_system_setting RPC with authorization and type guards.
  */
 export async function updateSystemSetting(
   key: string,
@@ -172,6 +181,58 @@ export async function updateSystemSetting(
         success: false,
         error: "Missing required setting key or value.",
       };
+    }
+
+    // Client-side domain and boundary validation
+    if (key === "voting_lock_hours") {
+      if (typeof value !== "number" || isNaN(value) || value <= 0 || value > 168) {
+        return {
+          success: false,
+          error: "Voting lock window must be a positive number up to 168 hours.",
+        };
+      }
+    } else if (key === "advocate_soft_cap_hours") {
+      if (typeof value !== "number" || isNaN(value) || value <= 0) {
+        return {
+          success: false,
+          error: "Advocate soft cap must be a positive number of hours.",
+        };
+      }
+    } else if (key === "advocate_hard_cap_hours") {
+      if (typeof value !== "number" || isNaN(value) || value <= 0 || value > 168) {
+        return {
+          success: false,
+          error: "Advocate hard cap must be a positive number of hours up to 168.",
+        };
+      }
+    } else if (key === "decree_supermajority_threshold") {
+      if (typeof value !== "number" || isNaN(value) || value < 0.5 || value > 1.0) {
+        return {
+          success: false,
+          error: "Supermajority threshold must be between 0.50 (50%) and 1.00 (100%).",
+        };
+      }
+    } else if (key === "decree_min_constituent_count") {
+      if (typeof value !== "number" || isNaN(value) || !Number.isInteger(value) || value < 1) {
+        return {
+          success: false,
+          error: "Minimum constituent count must be a positive integer.",
+        };
+      }
+    } else if (key === "blindspot_divergence_threshold") {
+      if (typeof value !== "number" || isNaN(value) || value < 0.0 || value > 2.0) {
+        return {
+          success: false,
+          error: "Blindspot divergence threshold must be between 0.0 and 2.0.",
+        };
+      }
+    } else if (key === "digest_default_limit") {
+      if (typeof value !== "number" || isNaN(value) || !Number.isInteger(value) || value < 1 || value > 50) {
+        return {
+          success: false,
+          error: "Default digest item limit must be an integer between 1 and 50.",
+        };
+      }
     }
 
     const userContext = await getCurrentUserContext().catch(() => null);
@@ -242,4 +303,44 @@ export async function updateSystemSetting(
       error: errorMessage,
     };
   }
+}
+
+/**
+ * Resolves a dynamic runtime numeric setting, falling back to a hardcoded default.
+ */
+export async function getDynamicSettingNumeric(
+  key: string,
+  defaultValue: number
+): Promise<number> {
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .schema("valerie")
+      .rpc("get_setting_numeric", {
+        p_key: key,
+        p_default: defaultValue,
+      });
+
+    if (!error && typeof data === "number" && !isNaN(data)) {
+      return data;
+    }
+
+    const { data: row } = await supabase
+      .schema("valerie")
+      .from("system_settings")
+      .select("value")
+      .eq("key", key)
+      .single();
+
+    if (row && typeof row.value === "number" && !isNaN(row.value)) {
+      return row.value;
+    }
+    if (row && typeof row.value === "string") {
+      const parsed = parseFloat(row.value);
+      if (!isNaN(parsed)) return parsed;
+    }
+  } catch {
+    // Non-blocking fallback
+  }
+  return defaultValue;
 }

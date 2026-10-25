@@ -12,6 +12,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
 import { resolveVoterLocale } from "@/lib/geo/resolveVoterLocale";
+import { getDynamicSettingNumeric } from "@/app/actions/valerieSettingsActions";
 import { revalidatePath } from "next/cache";
 import { cookies, headers } from "next/headers";
 
@@ -206,9 +207,16 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       console.warn("[Project Valerie] Non-blocking revalidation warning:", revalErr);
     }
 
+    let fallbackHours = 24;
+    try {
+      fallbackHours = await getDynamicSettingNumeric("voting_lock_hours", 24);
+    } catch {
+      fallbackHours = 24;
+    }
+
     const lockedUntil =
       data?.locked_until ||
-      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      new Date(Date.now() + fallbackHours * 60 * 60 * 1000).toISOString();
 
     return {
       success:     true,
