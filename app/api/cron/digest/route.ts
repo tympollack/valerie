@@ -132,21 +132,54 @@ export async function processDigestDispatch(
   const currentDate = options.currentDate || new Date();
   const batchSize = options.batchSize || 100;
 
-  // 1. Query all users with active digest subscriptions
+  // 1. Query all users with active digest subscriptions (with pagination support)
   const target =
     typeof (adminClient as any).schema === "function"
       ? (adminClient as any).schema("valerie").from("user_digest_preferences")
       : adminClient.from("user_digest_preferences");
 
-  const { data: rawPrefs, error: prefsError } = await target
-    .select("user_id, email_cadence, proximity_alerts_enabled, digest_day_of_week, last_digest_sent_at, unsubscribe_token")
-    .in("email_cadence", ["daily", "weekly"]);
+  const allPrefs: UserDigestPreferenceRow[] = [];
+  const queryBatchSize = 1000;
+  let offset = 0;
 
-  if (prefsError) {
-    throw new Error(`Failed to load digest preferences: ${prefsError.message}`);
+  while (true) {
+    const query = target
+      .select(
+        "user_id, email_cadence, proximity_alerts_enabled, digest_day_of_week, last_digest_sent_at, unsubscribe_token"
+      )
+      .in("email_cadence", ["daily", "weekly"]);
+
+    if (typeof query.range === "function") {
+      const { data: pageData, error: prefsError } = await query.range(
+        offset,
+        offset + queryBatchSize - 1
+      );
+
+      if (prefsError) {
+        throw new Error(`Failed to load digest preferences: ${prefsError.message}`);
+      }
+
+      if (!pageData || pageData.length === 0) {
+        break;
+      }
+
+      allPrefs.push(...(pageData as UserDigestPreferenceRow[]));
+
+      if (pageData.length < queryBatchSize) {
+        break;
+      }
+      offset += queryBatchSize;
+    } else {
+      const { data: fallbackData, error: fallbackError } = await query;
+      if (fallbackError) {
+        throw new Error(`Failed to load digest preferences: ${fallbackError.message}`);
+      }
+      if (fallbackData) {
+        allPrefs.push(...(fallbackData as UserDigestPreferenceRow[]));
+      }
+      break;
+    }
   }
-
-  const allPrefs = (rawPrefs || []) as UserDigestPreferenceRow[];
   const eligiblePrefs = allPrefs.filter((p) => isUserEligibleForDigest(p, currentDate));
 
   let totalDispatched = 0;

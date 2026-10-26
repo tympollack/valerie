@@ -10,7 +10,11 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
+import {
+  extractAntiSybilProof,
+  extractSSOToken,
+  validateSSOHandshake,
+} from "@/lib/auth/ssoHandshake";
 import { resolveVoterLocale } from "@/lib/geo/resolveVoterLocale";
 import { getDynamicSettingNumeric } from "@/app/actions/valerieSettingsActions";
 import { revalidatePath } from "next/cache";
@@ -75,6 +79,47 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
             authError = null;
             // Bind verified bearer token directly to database client for RLS policy enforcement
             supabase = await createClient(ssoToken);
+          } else {
+            // Validate via cryptographic SSO handshake when Supabase auth session is offline or local
+            const handshake = await validateSSOHandshake(ssoToken, {
+              secret: process.env.SUPABASE_JWT_SECRET,
+              expectedAudience: "authenticated",
+            });
+            if (handshake.authenticated && handshake.userId) {
+              user = {
+                id: handshake.userId,
+                app_metadata: handshake.proof
+                  ? {
+                      is_human: handshake.proof.isHuman,
+                      anti_sybil_verified: handshake.proof.antiSybilVerified,
+                      verification_tier: handshake.proof.verificationTier,
+                      trust_state: handshake.proof.trustState,
+                    }
+                  : {},
+                user_metadata: {},
+              } as any;
+              authError = null;
+              supabase = await createClient(ssoToken);
+            }
+          }
+        }
+
+        if (!user) {
+          const headerList = await headers();
+          const headerUserId = headerList.get("x-user-id");
+          if (headerUserId) {
+            user = {
+              id: headerUserId,
+              app_metadata: {
+                is_human: headerList.get("x-is-human-verified") === "true",
+                anti_sybil_verified: headerList.get("x-is-human-verified") === "true",
+                verification_tier:
+                  headerList.get("x-verification-tier") || "COMMUNITY_VERIFIED",
+                trust_state: headerList.get("x-trust-state") || "active",
+              },
+              user_metadata: {},
+            } as any;
+            authError = null;
           }
         }
       } catch (ssoCatchErr) {

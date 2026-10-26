@@ -90,12 +90,21 @@ function base64UrlDecodeToUint8Array(str: string): Uint8Array {
   return bytes;
 }
 
-function getJwtSecret(overrideSecret?: string): string {
+function getActionTokenSecret(overrideSecret?: string): string {
   return (
     overrideSecret ||
+    process.env.ACTION_TOKEN_SECRET ||
     process.env.JWT_SECRET ||
+    "valerie-email-action-token-secret-default"
+  );
+}
+
+function getSsoSecret(overrideSecret?: string): string {
+  return (
+    overrideSecret ||
     process.env.SUPABASE_JWT_SECRET ||
-    "valerie-default-email-action-secret-dev"
+    process.env.JWT_SECRET ||
+    "valerie-sso-bridge-secret-default"
   );
 }
 
@@ -123,7 +132,7 @@ export async function generateEmailActionToken(
     throw new Error("userId is required to generate an email action token.");
   }
 
-  const signingSecret = getJwtSecret(secret);
+  const signingSecret = getActionTokenSecret(secret);
   const nowSec = Math.floor(Date.now() / 1000);
   const expSec = nowSec + Math.max(1, ttlMinutes) * 60;
 
@@ -196,15 +205,19 @@ export async function verifyEmailActionToken(
     return { valid: false, error: "Payload missing required sub (user ID) claim." };
   }
 
-  // 2. Expiration check with clock tolerance
+  // 2. Strict expiration check (never allow expiration-free action tokens)
+  if (typeof payload.exp !== "number" || isNaN(payload.exp)) {
+    return { valid: false, error: "Action token missing required exp expiration claim." };
+  }
+
   const nowSec = Math.floor(Date.now() / 1000);
   const tolerance = options.clockToleranceSec ?? 60;
-  if (typeof payload.exp === "number" && payload.exp + tolerance < nowSec) {
+  if (payload.exp + tolerance < nowSec) {
     return { valid: false, error: "Action token has expired." };
   }
 
   // 3. Cryptographic HMAC-SHA256 signature verification
-  const signingSecret = getJwtSecret(options.secret);
+  const signingSecret = getActionTokenSecret(options.secret);
   try {
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey(
@@ -243,7 +256,7 @@ export async function generateBridgedSSOToken(
   userId: string,
   secret?: string
 ): Promise<string> {
-  const signingSecret = getJwtSecret(secret);
+  const signingSecret = getSsoSecret(secret);
   const nowSec = Math.floor(Date.now() / 1000);
   const expSec = nowSec + 7 * 24 * 3600; // 7 days
 
@@ -306,6 +319,7 @@ export function isActionTokenRoute(pathname: string): boolean {
  * Intercepts ?action_token=... on /poll/* and /digest/* routes.
  *
  * If valid and user is unauthenticated:
+ *   - Verifies route affinity (prevents poll token reuse on unrelated routes)
  *   - Seeds a signed session cookie across .sunshade.icu
  *   - Strips action_token from URL via HTTP redirect
  *
@@ -341,6 +355,16 @@ export async function handleEmailActionTokenMiddleware(
   // If token is invalid or expired, reject cleanly by simply redirecting to clean URL
   if (!verification.valid || !verification.payload) {
     return response;
+  }
+
+  // Route affinity check: if token binds to a specific pollId and request is to /poll(s)/<id>,
+  // ensure target pollId matches to prevent token reuse on unrelated polls.
+  if (verification.payload.pollId) {
+    const pollMatch = pathname.match(/^\/polls?\/([^/]+)/i);
+    if (pollMatch && pollMatch[1] && pollMatch[1] !== verification.payload.pollId) {
+      // Mismatched poll target; do not authenticate
+      return response;
+    }
   }
 
   // If valid, check if caller already has an active session cookie
