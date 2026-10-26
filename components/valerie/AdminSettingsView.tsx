@@ -11,6 +11,7 @@ import {
   Scroll,
   Cpu,
   Layers,
+  Bell,
   Save,
   CheckCircle2,
   AlertCircle,
@@ -51,6 +52,11 @@ const CATEGORY_METADATA: Record<
     description: "Default intake limits for persona, civic anchor, and blindspot content distribution.",
     icon: Layers,
   },
+  NOTIFICATIONS: {
+    label: "Email & Notification Delivery",
+    description: "Runtime controls for outbound Resend delivery, master kill-switch, sender signature, and alert throttling.",
+    icon: Bell,
+  },
   SYSTEM: {
     label: "System Infrastructure",
     description: "Core platform configurations and internal service thresholds.",
@@ -78,7 +84,9 @@ export function AdminSettingsView({
 
   const handleValueChange = (key: string, rawVal: string, origVal: unknown) => {
     let parsed: unknown = rawVal;
-    if (typeof origVal === "number") {
+    if (typeof origVal === "boolean") {
+      parsed = rawVal === "true";
+    } else if (typeof origVal === "number") {
       if (rawVal.trim() === "") {
         parsed = "";
       } else {
@@ -234,15 +242,28 @@ export function AdminSettingsView({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <input
-                        type={typeof setting.value === "number" ? "number" : "text"}
-                        step={typeof setting.value === "number" && setting.value < 1 ? "0.01" : "1"}
-                        disabled={!isPrivileged || isPending}
-                        value={String(currentValue ?? "")}
-                        onChange={(e) => handleValueChange(setting.key, e.target.value, setting.value)}
-                        className="w-32 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-right font-mono text-xs text-slate-200 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/50 disabled:opacity-50"
-                        aria-label={`Setting ${setting.key}`}
-                      />
+                      {typeof setting.value === "boolean" ? (
+                        <select
+                          disabled={!isPrivileged || isPending}
+                          value={String(currentValue)}
+                          onChange={(e) => handleValueChange(setting.key, e.target.value, setting.value)}
+                          className="w-32 rounded-lg border border-slate-800 bg-slate-900/80 px-2.5 py-1.5 font-mono text-xs text-slate-200 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/50 disabled:opacity-50"
+                          aria-label={`Setting ${setting.key}`}
+                        >
+                          <option value="true">Active (true)</option>
+                          <option value="false">Paused (false)</option>
+                        </select>
+                      ) : (
+                        <input
+                          type={typeof setting.value === "number" ? "number" : "text"}
+                          step={typeof setting.value === "number" && setting.value < 1 ? "0.01" : "1"}
+                          disabled={!isPrivileged || isPending}
+                          value={String(currentValue ?? "")}
+                          onChange={(e) => handleValueChange(setting.key, e.target.value, setting.value)}
+                          className="w-32 rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-right font-mono text-xs text-slate-200 focus:border-cyan-500/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/50 disabled:opacity-50"
+                          aria-label={`Setting ${setting.key}`}
+                        />
+                      )}
 
                       {isDirty && isPrivileged && (
                         <>

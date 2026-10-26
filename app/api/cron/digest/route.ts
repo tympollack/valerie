@@ -13,10 +13,17 @@ import { Resend } from "resend";
 import { generateEmailActionToken } from "@/lib/auth/emailTokens";
 import { parseDigestPayload } from "@/lib/valerie/digestEngine";
 import { renderCivicDocketHtml, type DocketItem } from "@/components/email/TheCivicDocket";
+import {
+  getNotificationDynamicSettings,
+  sendBatchWithRetry,
+  type NotificationDynamicSettings,
+} from "@/lib/valerie/notificationSettings";
 
 // =============================================================================
 // Helper Functions & Types
 // =============================================================================
+
+export { getNotificationDynamicSettings, sendBatchWithRetry, type NotificationDynamicSettings };
 
 export interface UserDigestPreferenceRow {
   user_id: string;
@@ -69,54 +76,6 @@ export function isUserEligibleForDigest(
 }
 
 /**
- * Dispatches an email batch via Resend with exponential backoff on rate limits.
- */
-export async function sendBatchWithRetry(
-  resend: Resend,
-  batch: Array<{ from: string; to: string; subject: string; html: string }>,
-  maxRetries: number = 3,
-  initialDelayMs: number = 500
-): Promise<unknown> {
-  let attempt = 0;
-  let delay = initialDelayMs;
-
-  while (attempt < maxRetries) {
-    try {
-      const response = await resend.batch.send(batch);
-      if (response.error) {
-        const errorMsg = String(response.error.message || "");
-        const isRateLimit =
-          response.error.name === "rate_limit_exceeded" ||
-          errorMsg.toLowerCase().includes("rate limit") ||
-          (response.error as any).statusCode === 429;
-
-        if (isRateLimit && attempt < maxRetries - 1) {
-          attempt++;
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          delay *= 2;
-          continue;
-        }
-        throw new Error(response.error.message || "Resend batch dispatch failed");
-      }
-      return response.data;
-    } catch (err: unknown) {
-      const isRateLimit =
-        (err as any)?.status === 429 ||
-        (err as any)?.statusCode === 429 ||
-        String((err as any)?.message).toLowerCase().includes("rate limit");
-
-      if (isRateLimit && attempt < maxRetries - 1) {
-        attempt++;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        delay *= 2;
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
-/**
  * Core processor for assembling, compiling, and batch dispatching civic digests.
  */
 export async function processDigestDispatch(
@@ -127,11 +86,43 @@ export async function processDigestDispatch(
     fromEmail?: string;
     currentDate?: Date;
     batchSize?: number;
+    forceDispatch?: boolean;
   } = {}
 ) {
-  const appBaseUrl = options.appBaseUrl || process.env.NEXT_PUBLIC_APP_URL || "https://votary.app";
-  const fromEmail = options.fromEmail || process.env.RESEND_FROM_EMAIL || "The Votary <digest@votary.app>";
+  // 1. Query live system settings (TASK-VAL-SETTINGS-WIRE-NOTIFICATIONS)
+  const settings = await getNotificationDynamicSettings(adminClient);
+
+  if (!settings.enabled) {
+    console.warn("[Project Valerie] Digest dispatch halted: notifications.enabled is false (paused_by_admin).");
+    return {
+      status: "paused_by_admin" as const,
+      totalEligible: 0,
+      totalDispatched: 0,
+      errors: [] as string[],
+    };
+  }
+
   const currentDate = options.currentDate || new Date();
+  const isHourMatch = Boolean(
+    options.forceDispatch ||
+    options.currentDate !== undefined ||
+    currentDate.getUTCHours() === settings.digestHourUtc
+  );
+
+  if (!isHourMatch) {
+    return {
+      status: "skipped_off_hour" as const,
+      targetHourUtc: settings.digestHourUtc,
+      currentHourUtc: currentDate.getUTCHours(),
+      totalEligible: 0,
+      totalDispatched: 0,
+      errors: [] as string[],
+    };
+  }
+
+  const dynamicSender = `${settings.fromName} <${settings.fromEmail}>`;
+  const fromEmail = options.fromEmail || (process.env.RESEND_FROM_EMAIL ? process.env.RESEND_FROM_EMAIL : dynamicSender);
+  const appBaseUrl = options.appBaseUrl || process.env.NEXT_PUBLIC_APP_URL || "https://votary.app";
   const batchSize = options.batchSize || 100;
 
   // 1. Query all users with active digest subscriptions (with pagination support)
@@ -337,8 +328,27 @@ export async function POST(request: NextRequest) {
   try {
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
     const resend = new Resend(resendApiKey);
+    const force = request.nextUrl.searchParams.get("force") === "true";
 
-    const result = await processDigestDispatch(adminClient, resend);
+    const result = await processDigestDispatch(adminClient, resend, { forceDispatch: force });
+
+    if ((result as any).status === "paused_by_admin") {
+      return NextResponse.json({
+        success: true,
+        status: "paused_by_admin",
+        message: "Notification delivery is currently paused by administrator kill-switch.",
+        data: result,
+      });
+    }
+
+    if ((result as any).status === "skipped_off_hour") {
+      return NextResponse.json({
+        success: true,
+        status: "skipped_off_hour",
+        message: "Digest dispatch skipped: off target dispatch hour.",
+        data: result,
+      });
+    }
 
     return NextResponse.json({
       success: true,
