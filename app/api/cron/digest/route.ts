@@ -124,11 +124,13 @@ export async function processDigestDispatch(
   resend: Resend,
   options: {
     appBaseUrl?: string;
+    fromEmail?: string;
     currentDate?: Date;
     batchSize?: number;
   } = {}
 ) {
-  const appBaseUrl = options.appBaseUrl || process.env.NEXT_PUBLIC_APP_URL || "https://valerie.sunshade.icu";
+  const appBaseUrl = options.appBaseUrl || process.env.NEXT_PUBLIC_APP_URL || "https://votary.app";
+  const fromEmail = options.fromEmail || process.env.RESEND_FROM_EMAIL || "The Votary <digest@votary.app>";
   const currentDate = options.currentDate || new Date();
   const batchSize = options.batchSize || 100;
 
@@ -251,7 +253,7 @@ export async function processDigestDispatch(
 
         preparedEmails.push({
           userId: pref.user_id,
-          from: "The Votary <digest@valerie.sunshade.icu>",
+          from: fromEmail,
           to: userEmail,
           subject: "The Civic Docket: Your Deliberation Queue",
           html,

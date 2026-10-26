@@ -297,7 +297,7 @@ describe("Scheduled Civic Digest Dispatcher (TASK-VAL-CRON-DISPATCH)", () => {
 
       const dispatchedEmail = capturedBatch[0];
       expect(dispatchedEmail.to).toBe(userEmail);
-      expect(dispatchedEmail.from).toBe("The Votary <digest@valerie.sunshade.icu>");
+      expect(dispatchedEmail.from).toBe("The Votary <digest@votary.app>");
       expect(dispatchedEmail.html).toContain("The Civic Docket");
       expect(dispatchedEmail.html).toContain("Should autonomous zoning laws require");
 
