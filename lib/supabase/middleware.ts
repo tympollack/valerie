@@ -10,8 +10,15 @@ import {
   type VerificationTier,
   type TrustState,
 } from "@/lib/auth/ssoHandshake";
+import { handleEmailActionTokenMiddleware } from "@/lib/auth/emailTokens";
 
 export async function updateSession(request: NextRequest) {
+  // 0. Intercept 1-click email action tokens on /poll/* and /digest/* routes
+  const actionTokenRedirect = await handleEmailActionTokenMiddleware(request);
+  if (actionTokenRedirect) {
+    return actionTokenRedirect;
+  }
+
   // Sanitize incoming headers to prevent client header spoofing
   const requestHeaders = new Headers(request.headers);
   requestHeaders.delete("x-user-id");
