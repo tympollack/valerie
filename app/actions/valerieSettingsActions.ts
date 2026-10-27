@@ -14,7 +14,7 @@ export interface SystemSettingItem {
   key: string;
   value: unknown;
   description: string | null;
-  category: "VOTING" | "LABOR" | "DECREE" | "AI_BIAS" | "DIGEST" | "SYSTEM" | string;
+  category: "VOTING" | "LABOR" | "DECREE" | "AI_BIAS" | "DIGEST" | "SYSTEM" | "NOTIFICATIONS" | string;
   is_secret: boolean;
   updated_at: string;
   updated_by?: string | null;
@@ -32,79 +32,35 @@ export interface UpdateSettingResult {
   error?: string;
 }
 
+const createFallback = (
+  key: string,
+  value: unknown,
+  description: string,
+  category: SystemSettingItem["category"]
+): SystemSettingItem => ({
+  key,
+  value,
+  description,
+  category,
+  is_secret: false,
+  updated_at: "2026-10-26T00:00:00.000Z",
+});
+
 const DEFAULT_FALLBACK_SETTINGS: SystemSettingItem[] = [
-  {
-    key: "voting_lock_hours",
-    value: 24,
-    description: "Commit-and-reveal lock window duration in hours",
-    category: "VOTING",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "advocate_soft_cap_hours",
-    value: 16,
-    description: "Advocate rolling 7-day soft ceiling in hours before throttling new voter matching",
-    category: "LABOR",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "advocate_hard_cap_hours",
-    value: 20,
-    description: "Advocate rolling 7-day hard ceiling in hours before mandatory operational task lock",
-    category: "LABOR",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "decree_supermajority_threshold",
-    value: 0.70,
-    description: "Supermajority consensus share (>= 70% or <= 30%) required for sovereign citizen decree compilation",
-    category: "DECREE",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "decree_min_constituent_count",
-    value: 250,
-    description: "Minimum verified constituent votes required for sovereign decree compilation",
-    category: "DECREE",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "blindspot_divergence_threshold",
-    value: 0.65,
-    description: "Minimum cosine distance threshold for blindspot bridge card candidate clusters",
-    category: "AI_BIAS",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "digest_default_limit",
-    value: 5,
-    description: "Default item count for personalized 60/30/10 civic intake feed",
-    category: "DIGEST",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "herald_cynic_bias_threshold",
-    value: 0.15,
-    description: "Cynic Referee bias rejection threshold for adversarial IRT decomposition",
-    category: "AI_BIAS",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    key: "herald_semantic_dedup_threshold",
-    value: 0.90,
-    description: "Cosine similarity cutoff for automated news ingest deduplication",
-    category: "AI_BIAS",
-    is_secret: false,
-    updated_at: new Date().toISOString(),
-  },
+  createFallback("voting_lock_hours", 24, "Commit-and-reveal lock window duration in hours", "VOTING"),
+  createFallback("advocate_soft_cap_hours", 16, "Advocate rolling 7-day soft ceiling in hours before throttling new voter matching", "LABOR"),
+  createFallback("advocate_hard_cap_hours", 20, "Advocate rolling 7-day hard ceiling in hours before mandatory operational task lock", "LABOR"),
+  createFallback("decree_supermajority_threshold", 0.70, "Supermajority consensus share required for decree compilation", "DECREE"),
+  createFallback("decree_min_constituent_count", 250, "Minimum verified constituent votes required for decree compilation", "DECREE"),
+  createFallback("blindspot_divergence_threshold", 0.65, "Minimum cosine distance threshold for blindspot bridge card candidate clusters", "AI_BIAS"),
+  createFallback("digest_default_limit", 5, "Default item count for personalized 60/30/10 civic intake feed", "DIGEST"),
+  createFallback("herald_cynic_bias_threshold", 0.15, "Cynic Referee bias rejection threshold for adversarial IRT decomposition", "AI_BIAS"),
+  createFallback("herald_semantic_dedup_threshold", 0.90, "Cosine similarity cutoff for automated news ingest deduplication", "AI_BIAS"),
+  createFallback("notifications.enabled", true, "Master Notification Kill-Switch: Emergency toggle to pause all outgoing emails", "NOTIFICATIONS"),
+  createFallback("notifications.from_email", "digest@mail.votary.app", "Outbound From Email: Verified sending email address on Resend", "NOTIFICATIONS"),
+  createFallback("notifications.from_name", "The Votary", "Outbound Sender Name: Display name appearing in user inbox headers", "NOTIFICATIONS"),
+  createFallback("notifications.max_daily_alerts_per_user", 2, "Max Daily Reveal Alerts: Ceiling on automated alerts per user per 24 hours", "NOTIFICATIONS"),
+  createFallback("notifications.digest_hour_utc", 12, "Digest Dispatch Hour (UTC): Target UTC hour for the Sunday weekly ledger run", "NOTIFICATIONS"),
 ];
 
 /**
