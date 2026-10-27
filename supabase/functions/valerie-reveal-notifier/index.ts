@@ -54,10 +54,16 @@ export async function processRevealNotifier(
   }
 
   const appBaseUrl = options.appBaseUrl || Deno.env.get("NEXT_PUBLIC_APP_URL") || "https://votary.app";
-  const tokenSecret = options.tokenSecret || Deno.env.get("ACTION_TOKEN_SECRET") || "valerie-action-token-secret-default";
+  const tokenSecret =
+    options.tokenSecret ||
+    Deno.env.get("ACTION_TOKEN_SECRET") ||
+    Deno.env.get("SUPABASE_JWT_SECRET") ||
+    Deno.env.get("JWT_SECRET") ||
+    "valerie-email-action-token-secret-default";
 
-  // 2. Query expired poll responses within recent window (last 48 hours)
-  const windowStart = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+  // 2. Query expired poll responses within recent window (default: last 1 hour for periodic worker)
+  const windowHours = (options as any).windowHours || 1;
+  const windowStart = new Date(Date.now() - windowHours * 3600 * 1000).toISOString();
   const nowIso = new Date().toISOString();
 
   const { data: responses, error: respError } = await (adminClient as any)
@@ -77,14 +83,15 @@ export async function processRevealNotifier(
     };
   }
 
-  // 3. Filter for users with proximity alerts enabled
+  // 3. Filter for users with proximity alerts enabled and not unsubscribed
   const userIds = Array.from(new Set(responses.map((r: any) => r.user_id)));
   const { data: prefs } = await (adminClient as any)
     .schema("valerie")
     .from("user_digest_preferences")
-    .select("user_id, proximity_alerts_enabled, unsubscribe_token")
+    .select("user_id, proximity_alerts_enabled, email_cadence, unsubscribe_token")
     .in("user_id", userIds)
-    .eq("proximity_alerts_enabled", true);
+    .eq("proximity_alerts_enabled", true)
+    .neq("email_cadence", "off");
 
   const allowedUserMap = new Map<string, string>();
   if (Array.isArray(prefs)) {
@@ -172,6 +179,15 @@ export async function processRevealNotifier(
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
+  }
+
+  const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
+  const cronSecret = Deno.env.get("CRON_SECRET") || Deno.env.get("WORKER_AUTH_TOKEN");
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    return new Response(JSON.stringify({ error: "Unauthorized worker invocation" }), {
+      status: 401,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    });
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");

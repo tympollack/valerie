@@ -9,7 +9,11 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { getCrossDomainCookieOptions, extractSSOToken } from "@/lib/auth/ssoHandshake";
+import {
+  getCrossDomainCookieOptions,
+  extractSSOToken,
+  validateSSOHandshake,
+} from "@/lib/auth/ssoHandshake";
 
 // =============================================================================
 // Types & Interfaces
@@ -91,21 +95,40 @@ function base64UrlDecodeToUint8Array(str: string): Uint8Array {
 }
 
 function getActionTokenSecret(overrideSecret?: string): string {
-  return (
+  const secret =
     overrideSecret ||
     process.env.ACTION_TOKEN_SECRET ||
-    process.env.JWT_SECRET ||
-    "valerie-email-action-token-secret-default"
-  );
+    process.env.SUPABASE_JWT_SECRET ||
+    process.env.JWT_SECRET;
+
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "[Project Valerie] Missing ACTION_TOKEN_SECRET or SUPABASE_JWT_SECRET in production runtime."
+      );
+    }
+    return "valerie-email-action-token-secret-default";
+  }
+
+  return secret;
 }
 
 function getSsoSecret(overrideSecret?: string): string {
-  return (
+  const secret =
     overrideSecret ||
     process.env.SUPABASE_JWT_SECRET ||
-    process.env.JWT_SECRET ||
-    "valerie-sso-bridge-secret-default"
-  );
+    process.env.JWT_SECRET;
+
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "[Project Valerie] Missing SUPABASE_JWT_SECRET in production runtime."
+      );
+    }
+    return "valerie-sso-bridge-secret-default";
+  }
+
+  return secret;
 }
 
 // =============================================================================
@@ -367,9 +390,17 @@ export async function handleEmailActionTokenMiddleware(
     }
   }
 
-  // If valid, check if caller already has an active session cookie
+  // If valid, check if caller already has an active, valid session cookie
   const existingToken = extractSSOToken(request);
-  if (!existingToken) {
+  let hasValidSession = false;
+  if (existingToken) {
+    const handshake = await validateSSOHandshake(existingToken, {
+      secret: getSsoSecret(options?.secret),
+    });
+    hasValidSession = handshake.authenticated && Boolean(handshake.userId);
+  }
+
+  if (!hasValidSession) {
     // Seed cross-domain session cookie
     const ssoToken = await generateBridgedSSOToken(
       verification.payload.sub,

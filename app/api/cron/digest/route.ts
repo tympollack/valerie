@@ -273,9 +273,17 @@ export async function processDigestDispatch(
       );
 
       // Update last_digest_sent_at timestamp
-      await target
-        .update({ last_digest_sent_at: new Date().toISOString() })
+      const { error: updateError } = await target
+        .update({
+          last_digest_sent_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
         .in("user_id", chunkUserIds);
+
+      if (updateError) {
+        console.error("[Project Valerie] Failed to update last_digest_sent_at:", updateError);
+        errors.push(`Timestamp update failed for chunk starting at ${i}: ${updateError.message}`);
+      }
 
       totalDispatched += preparedEmails.length;
     } catch (sendErr: unknown) {

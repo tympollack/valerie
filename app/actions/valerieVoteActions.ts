@@ -103,25 +103,6 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
             }
           }
         }
-
-        if (!user) {
-          const headerList = await headers();
-          const headerUserId = headerList.get("x-user-id");
-          if (headerUserId) {
-            user = {
-              id: headerUserId,
-              app_metadata: {
-                is_human: headerList.get("x-is-human-verified") === "true",
-                anti_sybil_verified: headerList.get("x-is-human-verified") === "true",
-                verification_tier:
-                  headerList.get("x-verification-tier") || "COMMUNITY_VERIFIED",
-                trust_state: headerList.get("x-trust-state") || "active",
-              },
-              user_metadata: {},
-            } as any;
-            authError = null;
-          }
-        }
       } catch (ssoCatchErr) {
         console.warn("[Project Valerie] SSO token extraction warning:", ssoCatchErr);
       }
@@ -178,6 +159,15 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     const locale = await resolveVoterLocale(undefined, user);
     const finalH3Res7 = locale.h3_res7 ?? h3HexIndex ?? null;
 
+    // Resolve dynamic lock duration from system settings
+    let lockHours = 24;
+    try {
+      lockHours = await getDynamicSettingNumeric("voting_lock_hours", 24);
+    } catch {
+      lockHours = 24;
+    }
+    const computedLockedUntil = new Date(Date.now() + lockHours * 60 * 60 * 1000).toISOString();
+
     // 5. Insert into valerie.poll_responses
     const { data, error: insertError } = await supabase
       .schema("valerie")
@@ -193,8 +183,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
         admin1_code:      locale.admin1_code,
         admin2_code:      locale.admin2_code,
         h3_res7:          finalH3Res7,
-        // locked_until is intentionally NOT set here — the DB default
-        // (NOW() + INTERVAL '24 hours') owns this value to prevent tampering.
+        locked_until:     computedLockedUntil,
       })
       .select("id, locked_until")
       .single();
@@ -252,16 +241,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       console.warn("[Project Valerie] Non-blocking revalidation warning:", revalErr);
     }
 
-    let fallbackHours = 24;
-    try {
-      fallbackHours = await getDynamicSettingNumeric("voting_lock_hours", 24);
-    } catch {
-      fallbackHours = 24;
-    }
-
-    const lockedUntil =
-      data?.locked_until ||
-      new Date(Date.now() + fallbackHours * 60 * 60 * 1000).toISOString();
+    const lockedUntil = data?.locked_until || computedLockedUntil;
 
     return {
       success:     true,

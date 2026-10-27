@@ -29,7 +29,7 @@ export async function handleUnsubscribeToken(
   return {
     success: true,
     status: 200,
-    message: "You have been unsubscribed from The Votary civic digest emails.",
+    message: "You have been unsubscribed from The Votary civic digest and alert emails.",
   };
 }
 

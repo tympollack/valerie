@@ -162,6 +162,15 @@ export async function generateRevealToken(
   return `${dataToSign}.${sigB64}`;
 }
 
+function escapeHtml(str: string): string {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /**
  * Renders HTML email notification for revealed results.
  */
@@ -170,6 +179,10 @@ export function renderRevealAlertHtml(params: {
   revealUrl: string;
   unsubscribeUrl: string;
 }): string {
+  const safeTitle = escapeHtml(params.pollTitle);
+  const safeRevealUrl = escapeHtml(params.revealUrl);
+  const safeUnsubscribeUrl = escapeHtml(params.unsubscribeUrl);
+
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"/><title>Results Unlocked</title></head>
@@ -182,17 +195,17 @@ export function renderRevealAlertHtml(params: {
       Results Unlocked: Commit-Lock Expired
     </h1>
     <p style="color:#94a3b8;font-size:15px;line-height:1.6;margin:0 0 24px 0;">
-      Your 24-hour blind voting window has concluded for: <strong>${params.pollTitle}</strong>.
+      Your 24-hour blind voting window has concluded for: <strong>${safeTitle}</strong>.
       Community bivariate consensus charts and premise challenges are now fully visible.
     </p>
-    <a href="${params.revealUrl}" style="display:inline-block;background-color:#06b6d4;color:#020617;font-weight:700;font-size:14px;padding:12px 24px;border-radius:8px;text-decoration:none;">
+    <a href="${safeRevealUrl}" style="display:inline-block;background-color:#06b6d4;color:#020617;font-weight:700;font-size:14px;padding:12px 24px;border-radius:8px;text-decoration:none;">
       View Bivariate Reveal Heatmap &rarr;
     </a>
     <div style="margin-top:32px;padding-top:16px;border-top:1px solid #1e293b;font-size:12px;color:#64748b;">
       <p>The Votary &bull; Project Valerie Autonomous Civic Governance</p>
-      <p><a href="${params.unsubscribeUrl}" style="color:#64748b;text-decoration:underline;">Unsubscribe from alerts</a></p>
+      <p><a href="${safeUnsubscribeUrl}" style="color:#64748b;text-decoration:underline;">Unsubscribe from alerts</a></p>
     </div>
   </div>
-</body>
+ </body>
 </html>`;
 }

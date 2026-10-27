@@ -224,5 +224,27 @@ describe("Email Action Tokens & Auth Bridge (TASK-VAL-AUTH-HMAC-BRIDGE)", () => 
       // Existing cookie preserved (no overwrite set on response)
       expect(res!.cookies.get("sunshade_sso")).toBeUndefined();
     });
+
+    it("replaces expired or invalid session cookie with fresh session when valid action token is presented", async () => {
+      const invalidExpiredToken = "invalid.expired.jwt-token";
+
+      const userId = "voter-from-email-refresh";
+      const token = await generateEmailActionToken(userId, "123", "vote");
+
+      const req = new NextRequest(
+        `https://valerie.sunshade.icu/poll/123?action_token=${token}`,
+        {
+          headers: {
+            cookie: `sunshade_sso=${invalidExpiredToken}`,
+          },
+        }
+      );
+      const res = await handleEmailActionTokenMiddleware(req);
+
+      expect(res).not.toBeNull();
+      expect(res!.headers.get("location")).toBe("https://valerie.sunshade.icu/poll/123");
+      // Fresh cookie issued because previous was invalid
+      expect(res!.cookies.get("sunshade_sso")?.value).toBeDefined();
+    });
   });
 });

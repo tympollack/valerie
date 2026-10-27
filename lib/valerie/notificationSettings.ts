@@ -62,7 +62,10 @@ export async function getNotificationDynamicSettings(
         } else if (row.key === "notifications.max_daily_alerts_per_user") {
           settings.maxDailyAlertsPerUser = Number(row.value) || settings.maxDailyAlertsPerUser;
         } else if (row.key === "notifications.digest_hour_utc") {
-          settings.digestHourUtc = Number(row.value) || settings.digestHourUtc;
+          const hour = Number(row.value);
+          if (Number.isInteger(hour) && hour >= 0 && hour <= 23) {
+            settings.digestHourUtc = hour;
+          }
         }
       }
     }

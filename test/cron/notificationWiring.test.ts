@@ -246,5 +246,37 @@ describe("Notification Dynamic Settings & Wiring (TASK-VAL-SETTINGS-WIRE-NOTIFIC
       expect(html).toContain("https://votary.app/api/digest/unsubscribe?token=unsub-1");
       expect(html).toContain("Results Unlocked");
     });
+
+    it("escapes malicious markup in poll title when rendering reveal alert HTML", () => {
+      const html = renderRevealAlertHtml({
+        pollTitle: "<script>alert('pwned')</script>&<b>Injected</b>",
+        revealUrl: "https://votary.app/poll/poll-123?action_token=signed-token",
+        unsubscribeUrl: "https://votary.app/api/digest/unsubscribe?token=unsub-1",
+      });
+
+      expect(html).not.toContain("<script>");
+      expect(html).toContain("&lt;script&gt;");
+      expect(html).toContain("&amp;&lt;b&gt;Injected&lt;/b&gt;");
+    });
+
+    it("preserves midnight (0 UTC) as valid digestHourUtc without reverting to 12", async () => {
+      const mockClient = {
+        schema: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              in: vi.fn().mockResolvedValue({
+                data: [
+                  { key: "notifications.digest_hour_utc", value: "0" },
+                ],
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      } as any;
+
+      const settings = await getNotificationDynamicSettings(mockClient);
+      expect(settings.digestHourUtc).toBe(0);
+    });
   });
 });
