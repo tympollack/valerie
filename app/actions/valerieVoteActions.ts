@@ -10,8 +10,13 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
+import {
+  extractAntiSybilProof,
+  extractSSOToken,
+  validateSSOHandshake,
+} from "@/lib/auth/ssoHandshake";
 import { resolveVoterLocale } from "@/lib/geo/resolveVoterLocale";
+import { getDynamicSettingNumeric } from "@/app/actions/valerieSettingsActions";
 import { revalidatePath } from "next/cache";
 import { cookies, headers } from "next/headers";
 
@@ -74,6 +79,28 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
             authError = null;
             // Bind verified bearer token directly to database client for RLS policy enforcement
             supabase = await createClient(ssoToken);
+          } else {
+            // Validate via cryptographic SSO handshake when Supabase auth session is offline or local
+            const handshake = await validateSSOHandshake(ssoToken, {
+              secret: process.env.SUPABASE_JWT_SECRET,
+              expectedAudience: "authenticated",
+            });
+            if (handshake.authenticated && handshake.userId) {
+              user = {
+                id: handshake.userId,
+                app_metadata: handshake.proof
+                  ? {
+                      is_human: handshake.proof.isHuman,
+                      anti_sybil_verified: handshake.proof.antiSybilVerified,
+                      verification_tier: handshake.proof.verificationTier,
+                      trust_state: handshake.proof.trustState,
+                    }
+                  : {},
+                user_metadata: {},
+              } as any;
+              authError = null;
+              supabase = await createClient(ssoToken);
+            }
           }
         }
       } catch (ssoCatchErr) {
@@ -132,6 +159,15 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     const locale = await resolveVoterLocale(undefined, user);
     const finalH3Res7 = locale.h3_res7 ?? h3HexIndex ?? null;
 
+    // Resolve dynamic lock duration from system settings
+    let lockHours = 24;
+    try {
+      lockHours = await getDynamicSettingNumeric("voting_lock_hours", 24);
+    } catch {
+      lockHours = 24;
+    }
+    const computedLockedUntil = new Date(Date.now() + lockHours * 60 * 60 * 1000).toISOString();
+
     // 5. Insert into valerie.poll_responses
     const { data, error: insertError } = await supabase
       .schema("valerie")
@@ -147,8 +183,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
         admin1_code:      locale.admin1_code,
         admin2_code:      locale.admin2_code,
         h3_res7:          finalH3Res7,
-        // locked_until is intentionally NOT set here — the DB default
-        // (NOW() + INTERVAL '24 hours') owns this value to prevent tampering.
+        locked_until:     computedLockedUntil,
       })
       .select("id, locked_until")
       .single();
@@ -206,9 +241,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
       console.warn("[Project Valerie] Non-blocking revalidation warning:", revalErr);
     }
 
-    const lockedUntil =
-      data?.locked_until ||
-      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const lockedUntil = data?.locked_until || computedLockedUntil;
 
     return {
       success:     true,
