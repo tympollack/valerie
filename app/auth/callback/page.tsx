@@ -38,7 +38,7 @@ export default function AuthCallbackPage() {
           }
         },
         persistServerSession: async (accessToken, refreshToken) => {
-          await hydrateSessionAction(accessToken, refreshToken)
+          return await hydrateSessionAction(accessToken, refreshToken)
         },
       })
 

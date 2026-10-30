@@ -203,6 +203,7 @@ describe("SettingsView Component", () => {
     expect(screen.getByText(/SSO Connected/i)).toBeInTheDocument()
     expect(screen.getByText(/verified@sunshade.icu/i)).toBeInTheDocument()
     expect(screen.getByText("VERIFIED HUMAN")).toBeInTheDocument()
+    expect(screen.getByText("Verified Citizen")).toBeInTheDocument()
     expect(
       screen.getByText(/Eligible \(1 Human, 1 Vote\)/i)
     ).toBeInTheDocument()

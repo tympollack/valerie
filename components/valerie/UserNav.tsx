@@ -160,12 +160,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       ? "https://hub.sunshade.icu"
       : "https://hub.sunshade.icu"
 
-  const loginUrl = returnToUrl
-    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}`
-    : `${hubBaseUrl}/login`
-  const verifyUrl = returnToUrl
-    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}&verify=true`
-    : `${hubBaseUrl}/dashboard`
+  const callbackUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/")}`
+      : "/auth/callback"
+
+  const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
+  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`
 
   // 1. Unauthenticated State
   if (!userContext.authenticated) {

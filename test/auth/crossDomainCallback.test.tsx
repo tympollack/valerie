@@ -135,6 +135,9 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
     it("sanitizes open-redirect attempts to local relative paths", () => {
       expect(sanitizeReturnTo("https://evil.com")).toBe("/deliberation")
       expect(sanitizeReturnTo("//malicious-site.com")).toBe("/deliberation")
+      expect(sanitizeReturnTo("/\\evil.com")).toBe("/deliberation")
+      expect(sanitizeReturnTo("/\n/evil.example")).toBe("/deliberation")
+      expect(sanitizeReturnTo("/\r\n/evil.example")).toBe("/deliberation")
       expect(sanitizeReturnTo("/poll/123")).toBe("/poll/123")
       expect(sanitizeReturnTo("")).toBe("/deliberation")
     })
@@ -148,6 +151,19 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(result.userId).toBe("usr-verified-citizen-001")
       expect(result.verificationTier).toBe("COMMUNITY_VERIFIED")
       expect(result.trustState).toBe("active")
+    })
+
+    it("strictly rejects human verification if trust state is slashed even with verified claims", () => {
+      const slashedJWT = createTestJWT({
+        sub: "usr-slashed-003",
+        exp: now + 3600,
+        user_metadata: { is_human_verified: true },
+        app_metadata: { is_human: true, trust_state: "slashed", verification_tier: "COMMUNITY_VERIFIED" },
+      })
+      const result = verifyAntiSybilClaim(slashedJWT)
+
+      expect(result.isHumanVerified).toBe(false)
+      expect(result.trustState).toBe("slashed")
     })
 
     it("identifies unverified accounts when is_human_verified is absent or false", () => {
@@ -166,13 +182,13 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
   })
 
   describe("getClientCookieStrings", () => {
-    it("generates cookie strings targeting the .votary.app apex domain", () => {
+    it("generates cookie strings targeting the .votary.app apex domain without exposing refresh tokens", () => {
       const cookies = getClientCookieStrings("mock_token_123", "mock_refresh_456", "votary.app")
 
       expect(cookies.some((c) => c.startsWith("sunshade_sso=") && c.includes("domain=.votary.app"))).toBe(true)
       expect(cookies.some((c) => c.startsWith("sunshade_sso_token=") && c.includes("domain=.votary.app"))).toBe(true)
       expect(cookies.some((c) => c.startsWith("sb-access-token=") && c.includes("domain=.votary.app"))).toBe(true)
-      expect(cookies.some((c) => c.startsWith("sb-refresh-token=") && c.includes("domain=.votary.app"))).toBe(true)
+      expect(cookies.some((c) => c.startsWith("sb-refresh-token="))).toBe(false)
     })
 
     it("supports subdomains of votary.app with wildcard apex domain", () => {
@@ -244,6 +260,30 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
       expect(screen.getByText(/Authentication Incomplete/i)).toBeInTheDocument()
       expect(screen.getByText(/Verification denied by user/i)).toBeInTheDocument()
       expect(screen.getByRole("link", { name: /Return to Deliberation/i })).toBeInTheDocument()
+    })
+  })
+
+  it("displays error card when server session hydration rejects token", async () => {
+    mockHydrateSessionAction.mockResolvedValueOnce({
+      success: false,
+      userId: null,
+      isHumanVerified: false,
+      error: "Invalid or unverified access token",
+    })
+
+    const token = createTestJWT({
+      sub: "usr-citizen-42",
+      user_metadata: { is_human_verified: true },
+    })
+
+    window.location.hash = `#access_token=${token}&refresh_token=refresh_123`
+
+    render(<AuthCallbackPage />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/Authentication Incomplete/i)).toBeInTheDocument()
+      expect(screen.getByText(/Invalid or unverified access token/i)).toBeInTheDocument()
+      expect(mockReplace).not.toHaveBeenCalled()
     })
   })
 })

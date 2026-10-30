@@ -38,7 +38,10 @@ export interface ProcessCallbackParams {
   hostname: string
   exchangeCode?: (code: string) => Promise<{ access_token: string; refresh_token?: string } | null>
   setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<void>
-  persistServerSession?: (accessToken: string, refreshToken?: string | null) => Promise<void>
+  persistServerSession?: (
+    accessToken: string,
+    refreshToken?: string | null
+  ) => Promise<{ success: boolean; error?: string } | void>
 }
 
 export interface ProcessCallbackResult {
@@ -56,12 +59,31 @@ export function sanitizeReturnTo(target: string | null | undefined): string {
     return "/deliberation"
   }
 
-  const trimmed = target.trim()
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !trimmed.includes("\\")) {
-    return trimmed
+  // Reject immediately if target contains backslashes or protocol specifiers
+  if (target.includes("\\") || target.includes("://") || target.trim().startsWith("//")) {
+    return "/deliberation"
   }
 
-  return "/deliberation"
+  // Strip control characters and whitespace
+  const cleaned = target.replace(/[\x00-\x1F\x7F\s]+/g, "").trim()
+  if (
+    !cleaned.startsWith("/") ||
+    cleaned.startsWith("//") ||
+    cleaned.includes("://") ||
+    cleaned.includes("\\")
+  ) {
+    return "/deliberation"
+  }
+
+  try {
+    const parsed = new URL(cleaned, "https://votary.app")
+    if (parsed.origin !== "https://votary.app") {
+      return "/deliberation"
+    }
+    return parsed.pathname + parsed.search + parsed.hash
+  } catch {
+    return "/deliberation"
+  }
 }
 
 /**
@@ -166,20 +188,9 @@ export function verifyAntiSybilClaim(
     }
   }
 
-  const userMeta = (payload.user_metadata as Record<string, unknown>) || {}
-  const appMeta = (payload.app_metadata as Record<string, unknown>) || {}
   const proof = extractAntiSybilProof(payload)
-
-  const isHumanVerified = Boolean(
-    userMeta.is_human_verified === true ||
-      userMeta.is_human === true ||
-      appMeta.is_human_verified === true ||
-      appMeta.is_human === true ||
-      appMeta.anti_sybil_verified === true ||
-      payload.is_human === true ||
-      payload.anti_sybil_verified === true ||
-      (proof.isHuman && proof.trustState === "active")
-  )
+  // Hard gate: Slashed or quarantined trust states strictly negate human verification
+  const isHumanVerified = Boolean(proof.isHuman && proof.trustState === "active")
 
   const userId = payload.sub || payload.id || payload.user_id || null
 
@@ -193,10 +204,11 @@ export function verifyAntiSybilClaim(
 
 /**
  * Builds client-side cookie assignment strings for the votary.app apex domain.
+ * Note: Refresh tokens are intentionally omitted here to prevent exposing long-lived credentials to client-side scripts.
  */
 export function getClientCookieStrings(
   accessToken: string,
-  refreshToken?: string | null,
+  _refreshToken?: string | null,
   hostname: string = "votary.app"
 ): string[] {
   const cookieOpts = getCrossDomainCookieOptions(hostname)
@@ -207,19 +219,11 @@ export function getClientCookieStrings(
   const maxAgePart = "; max-age=604800" // 7 days
   const sameSitePart = "; SameSite=Lax; path=/"
 
-  const cookies: string[] = [
+  return [
     `sunshade_sso=${encodeURIComponent(accessToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
     `sunshade_sso_token=${encodeURIComponent(accessToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
     `sb-access-token=${encodeURIComponent(accessToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
   ]
-
-  if (refreshToken) {
-    cookies.push(
-      `sb-refresh-token=${encodeURIComponent(refreshToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`
-    )
-  }
-
-  return cookies
 }
 
 /**
@@ -285,9 +289,18 @@ export async function processCallbackAuthentication({
 
   if (persistServerSession) {
     try {
-      await persistServerSession(activeAccessToken, activeRefreshToken)
-    } catch {
-      // Graceful degradation for purely client sessions
+      const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
+      if (serverRes && typeof serverRes === "object" && !serverRes.success) {
+        return {
+          success: false,
+          error: serverRes.error || "Server session hydration failed",
+        }
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || "Failed to persist server session",
+      }
     }
   }
 

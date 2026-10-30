@@ -69,12 +69,13 @@ export function SettingsView({ userContext }: SettingsViewProps) {
       ? "https://hub.sunshade.icu"
       : "https://hub.sunshade.icu"
 
-  const loginUrl = returnToUrl
-    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}`
-    : `${hubBaseUrl}/login`
-  const verifyUrl = returnToUrl
-    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}&verify=true`
-    : `${hubBaseUrl}/dashboard`
+  const callbackUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/settings")}`
+      : "/auth/callback"
+
+  const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
+  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`
 
   return (
     <div className="space-y-6">
@@ -275,7 +276,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
               )}
             >
               {userContext.isHumanVerified
-                ? "Verified Resident"
+                ? "Verified Citizen"
                 : "Action Needed"}
             </span>
             <span className="hidden font-mono text-[10px] text-slate-500 uppercase sm:block">
