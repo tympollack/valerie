@@ -143,6 +143,11 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       // Rejects cross-apex redirects to prevent cookie loss
       expect(sanitizeReturnTo("https://deliberation.votary.app/poll/123", "valerie.sunshade.icu")).toBe("/deliberation")
       expect(sanitizeReturnTo("https://valerie-stag.sunshade.icu/poll/123", "valerie.sunshade.icu")).toBe("https://valerie-stag.sunshade.icu/poll/123")
+      // Preserves local relative paths on preview and custom deployments
+      expect(sanitizeReturnTo("/poll/123", "valerie-git-preview-sunshade.vercel.app")).toBe("/poll/123")
+      expect(sanitizeReturnTo("/poll/123?active=true#tally", "preview.custom.net")).toBe("/poll/123?active=true#tally")
+      expect(sanitizeReturnTo("https://preview.custom.net/poll/123", "preview.custom.net")).toBe("/poll/123")
+      expect(sanitizeReturnTo("https://evil.com", "valerie-git-preview-sunshade.vercel.app")).toBe("/deliberation")
       expect(sanitizeReturnTo("/poll/123")).toBe("/poll/123")
       expect(sanitizeReturnTo("")).toBe("/deliberation")
     })

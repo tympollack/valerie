@@ -74,6 +74,29 @@ export function sanitizeReturnTo(
     return "/deliberation"
   }
 
+  // 1. If target is a clean local relative path (starts with / and does not specify a protocol),
+  // it is valid on any current host (including Vercel preview deployments, localhost, and production).
+  if (
+    cleaned.startsWith("/") &&
+    !cleaned.startsWith("//") &&
+    !cleaned.includes("://") &&
+    !cleaned.includes("\\")
+  ) {
+    try {
+      const parsedLocal = new URL(cleaned, "https://local.check")
+      if (parsedLocal.origin === "https://local.check") {
+        const safePath = parsedLocal.pathname + parsedLocal.search + parsedLocal.hash
+        if (safePath.startsWith("/") && !safePath.startsWith("//") && !safePath.includes("\\")) {
+          return safePath
+        }
+      }
+    } catch {
+      return "/deliberation"
+    }
+  }
+
+  // 2. For absolute URLs, enforce that the destination host shares the same recognized
+  // cookie apex domain (votary.app or sunshade.icu) as currentHostname to prevent cross-apex session loss.
   const baseOrigin = currentHostname.includes("://")
     ? currentHostname
     : `https://${currentHostname}`
@@ -86,6 +109,14 @@ export function sanitizeReturnTo(
 
     const parsed = new URL(cleaned, `https://${baseHost}`)
     const destHost = parsed.hostname.toLowerCase()
+
+    // If absolute URL points to the exact same host as baseHost, extract local path
+    if (destHost === baseHost) {
+      const safePath = parsed.pathname + parsed.search + parsed.hash
+      if (safePath.startsWith("/") && !safePath.startsWith("//") && !safePath.includes("\\")) {
+        return safePath
+      }
+    }
 
     // Enforce that destination shares the same cookie apex domain as the callback host
     // to prevent cross-apex cookie loss.
