@@ -53,9 +53,12 @@ export interface ProcessCallbackResult {
 /**
  * Safely sanitizes the return_to target URL to prevent open redirect vulnerabilities.
  * Enforces local relative paths starting with / (excluding protocol-relative //)
- * or safe absolute URLs strictly matching votary.app / sunshade.icu apex domains.
+ * or safe absolute URLs strictly matching the current callback host's cookie apex domain.
  */
-export function sanitizeReturnTo(target: string | null | undefined): string {
+export function sanitizeReturnTo(
+  target: string | null | undefined,
+  currentHostname: string = "votary.app"
+): string {
   if (!target || typeof target !== "string") {
     return "/deliberation"
   }
@@ -71,27 +74,38 @@ export function sanitizeReturnTo(target: string | null | undefined): string {
     return "/deliberation"
   }
 
-  try {
-    const parsed = new URL(cleaned, "https://votary.app")
-    // Only allow origins belonging to votary.app, localhost, or .sunshade.icu
-    const isAllowedHost =
-      parsed.origin === "https://votary.app" ||
-      parsed.hostname === "votary.app" ||
-      parsed.hostname.endsWith(".votary.app") ||
-      parsed.hostname === "localhost" ||
-      parsed.hostname.endsWith(".sunshade.icu")
+  const baseOrigin = currentHostname.includes("://")
+    ? currentHostname
+    : `https://${currentHostname}`
 
-    if (!isAllowedHost) {
+  try {
+    const baseHost = new URL(baseOrigin).hostname.toLowerCase()
+    const isBaseSunshade = baseHost === "sunshade.icu" || baseHost.endsWith(".sunshade.icu")
+    const isBaseVotary = baseHost === "votary.app" || baseHost.endsWith(".votary.app")
+    const isBaseLocal = baseHost === "localhost" || baseHost === "127.0.0.1"
+
+    const parsed = new URL(cleaned, `https://${baseHost}`)
+    const destHost = parsed.hostname.toLowerCase()
+
+    // Enforce that destination shares the same cookie apex domain as the callback host
+    // to prevent cross-apex cookie loss.
+    const isSameApex =
+      (isBaseSunshade && (destHost === "sunshade.icu" || destHost.endsWith(".sunshade.icu"))) ||
+      (isBaseVotary && (destHost === "votary.app" || destHost.endsWith(".votary.app"))) ||
+      (isBaseLocal && (destHost === "localhost" || destHost === "127.0.0.1" || destHost === "votary.app"))
+
+    if (!isSameApex) {
       return "/deliberation"
     }
 
-    // If destination is an approved subdomain (e.g. deliberation.votary.app or valerie-stag.sunshade.icu),
+    // If destination is an approved subdomain within the same apex domain (e.g. deliberation.votary.app),
     // preserve full URL so cross-subdomain navigation reaches the intended host.
     const isApexOrLocal =
-      parsed.hostname === "votary.app" ||
-      parsed.hostname === "localhost"
+      destHost === "votary.app" ||
+      destHost === "localhost" ||
+      destHost === "127.0.0.1"
 
-    if (!isApexOrLocal && (parsed.hostname.endsWith(".votary.app") || parsed.hostname.endsWith(".sunshade.icu"))) {
+    if (!isApexOrLocal && (destHost.endsWith(".votary.app") || destHost.endsWith(".sunshade.icu"))) {
       return parsed.origin + parsed.pathname + parsed.search + parsed.hash
     }
 
@@ -113,7 +127,8 @@ export function sanitizeReturnTo(target: string | null | undefined): string {
  */
 export function parseCallbackTokens(
   hashOrUrl: string = "",
-  searchParamsString: string = ""
+  searchParamsString: string = "",
+  hostname: string = "votary.app"
 ): ParsedCallbackTokens {
   let hashStr = hashOrUrl || ""
   let searchStr = searchParamsString || ""
@@ -157,7 +172,7 @@ export function parseCallbackTokens(
     queryParams.get("state") ||
     "/deliberation"
 
-  const returnTo = sanitizeReturnTo(rawReturnTo)
+  const returnTo = sanitizeReturnTo(rawReturnTo, hostname)
 
   // Error handling
   const error =
@@ -255,7 +270,7 @@ export async function processCallbackAuthentication({
   setSession,
   persistServerSession,
 }: ProcessCallbackParams): Promise<ProcessCallbackResult> {
-  const tokens = parseCallbackTokens(hash, search)
+  const tokens = parseCallbackTokens(hash, search, hostname)
 
   if (tokens.error) {
     return { success: false, error: tokens.errorDescription || tokens.error }
