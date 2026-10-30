@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import {
   decodeJWT,
   extractAntiSybilProof,
+  extractSSOToken,
   SUNSHADE_COOKIE_NAMES,
   getCrossDomainCookieOptions,
   type VerificationTier,
@@ -34,23 +35,40 @@ export async function getCurrentUserContext(): Promise<UserContext> {
 
   if (supabaseUrl && supabaseKey) {
     try {
-      const supabase = await createClient()
+      const cookieStore = await cookies()
+      const ssoToken = extractSSOToken(cookieStore)
+      const supabase = await createClient(ssoToken)
+      let resolvedUser = null
+
       const {
         data: { user },
+        error: userErr,
       } = await supabase.auth.getUser()
 
-      if (user) {
-        const proof = extractAntiSybilProof(user)
-        const email = user.email || null
+      if (!userErr && user) {
+        resolvedUser = user
+      } else if (ssoToken) {
+        const {
+          data: ssoData,
+          error: ssoErr,
+        } = await supabase.auth.getUser(ssoToken)
+        if (!ssoErr && ssoData?.user) {
+          resolvedUser = ssoData.user
+        }
+      }
+
+      if (resolvedUser) {
+        const proof = extractAntiSybilProof(resolvedUser)
+        const email = resolvedUser.email || null
         const displayName =
-          (user.user_metadata?.full_name as string) ||
-          (user.user_metadata?.name as string) ||
-          (user.user_metadata?.display_name as string) ||
+          (resolvedUser.user_metadata?.full_name as string) ||
+          (resolvedUser.user_metadata?.name as string) ||
+          (resolvedUser.user_metadata?.display_name as string) ||
           (email ? email.split("@")[0] : null)
 
         return {
           authenticated: true,
-          userId: user.id,
+          userId: resolvedUser.id,
           email,
           displayName,
           isHumanVerified: proof.isHuman && proof.trustState === "active",
@@ -203,6 +221,8 @@ export async function hydrateSessionAction(
     }
   }
 
+  let verifiedUser: { id: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> } | null = null
+
   // Cryptographically verify token with Supabase Auth when configured
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -222,15 +242,24 @@ export async function hydrateSessionAction(
           error: userErr?.message || "Invalid or unverified access token",
         }
       }
+      verifiedUser = user
     } catch {
-      // Allow graceful fallback for offline mock test runners
+      if (process.env.NODE_ENV !== "test") {
+        return {
+          success: false,
+          userId: null,
+          isHumanVerified: false,
+          error: "Authentication service unavailable or verification failed",
+        }
+      }
     }
   }
 
-  const proof = extractAntiSybilProof(payload)
+  // Derive verification claims from cryptographically verified user or decoded payload
+  const proof = extractAntiSybilProof(verifiedUser || payload)
   // Hard Gate: trust state MUST be active for human verification
   const isHumanVerified = Boolean(proof.isHuman && proof.trustState === "active")
-  const userId = payload.sub || payload.id || payload.user_id || null
+  const userId = verifiedUser ? verifiedUser.id : (payload.sub || payload.id || payload.user_id || null)
 
   const cookieStore = await cookies()
   const headerList = await headers()

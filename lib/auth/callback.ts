@@ -52,35 +52,44 @@ export interface ProcessCallbackResult {
 
 /**
  * Safely sanitizes the return_to target URL to prevent open redirect vulnerabilities.
- * Enforces local relative paths starting with / (excluding protocol-relative //).
+ * Enforces local relative paths starting with / (excluding protocol-relative //)
+ * or safe absolute URLs strictly matching votary.app / sunshade.icu apex domains.
  */
 export function sanitizeReturnTo(target: string | null | undefined): string {
   if (!target || typeof target !== "string") {
     return "/deliberation"
   }
 
-  // Reject immediately if target contains backslashes or protocol specifiers
-  if (target.includes("\\") || target.includes("://") || target.trim().startsWith("//")) {
+  // Reject immediately if target contains backslashes or protocol-relative slashes
+  if (target.includes("\\") || target.trim().startsWith("//")) {
     return "/deliberation"
   }
 
   // Strip control characters and whitespace
   const cleaned = target.replace(/[\x00-\x1F\x7F\s]+/g, "").trim()
-  if (
-    !cleaned.startsWith("/") ||
-    cleaned.startsWith("//") ||
-    cleaned.includes("://") ||
-    cleaned.includes("\\")
-  ) {
+  if (cleaned.includes("\\") || cleaned.startsWith("//")) {
     return "/deliberation"
   }
 
   try {
     const parsed = new URL(cleaned, "https://votary.app")
-    if (parsed.origin !== "https://votary.app") {
+    // Only allow origins belonging to votary.app, localhost, or .sunshade.icu
+    const isAllowedHost =
+      parsed.origin === "https://votary.app" ||
+      parsed.hostname === "votary.app" ||
+      parsed.hostname.endsWith(".votary.app") ||
+      parsed.hostname === "localhost" ||
+      parsed.hostname.endsWith(".sunshade.icu")
+
+    if (!isAllowedHost) {
       return "/deliberation"
     }
-    return parsed.pathname + parsed.search + parsed.hash
+
+    const safePath = parsed.pathname + parsed.search + parsed.hash
+    if (!safePath.startsWith("/") || safePath.startsWith("//") || safePath.includes("\\")) {
+      return "/deliberation"
+    }
+    return safePath
   } catch {
     return "/deliberation"
   }
@@ -89,6 +98,8 @@ export function sanitizeReturnTo(target: string | null | undefined): string {
 /**
  * Parses authentication tokens, PKCE codes, and return destinations from
  * URL hash fragments, query strings, or full URL representations.
+ * Tokens are strictly accepted from URL hash fragments only (#access_token=...)
+ * to adhere to RFC 6749 and prevent credential retention in query strings/logs.
  */
 export function parseCallbackTokens(
   hashOrUrl: string = "",
@@ -119,14 +130,12 @@ export function parseCallbackTokens(
   const hashParams = new URLSearchParams(cleanHash)
   const queryParams = new URLSearchParams(cleanSearch)
 
-  // Token extraction priority: hash fragment first (standard OAuth implicit/token redirect),
-  // then query parameters (direct server redirects or code exchange).
-  const accessToken =
-    hashParams.get("access_token") || queryParams.get("access_token") || null
-  const refreshToken =
-    hashParams.get("refresh_token") || queryParams.get("refresh_token") || null
-  const code =
-    queryParams.get("code") || hashParams.get("code") || null
+  // Security standard: Tokens are extracted exclusively from URL hash fragments (#access_token=...)
+  // to prevent exposing credentials in server logs, HTTP referrers, and browser query history.
+  // Query parameters are reserved for authorization code exchange (?code=...), errors, and return_to.
+  const accessToken = hashParams.get("access_token") || null
+  const refreshToken = hashParams.get("refresh_token") || null
+  const code = queryParams.get("code") || hashParams.get("code") || null
 
   // Target redirect destination
   const rawReturnTo =
@@ -204,10 +213,11 @@ export function verifyAntiSybilClaim(
 
 /**
  * Builds client-side cookie assignment strings for the votary.app apex domain.
- * Note: Refresh tokens are intentionally omitted here to prevent exposing long-lived credentials to client-side scripts.
+ * Note: Sensitive bearer and refresh credentials are kept in HttpOnly server cookies.
+ * Client cookies only carry non-sensitive session presence indicators.
  */
 export function getClientCookieStrings(
-  accessToken: string,
+  _accessToken?: string | null,
   _refreshToken?: string | null,
   hostname: string = "votary.app"
 ): string[] {
@@ -220,9 +230,7 @@ export function getClientCookieStrings(
   const sameSitePart = "; SameSite=Lax; path=/"
 
   return [
-    `sunshade_sso=${encodeURIComponent(accessToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
-    `sunshade_sso_token=${encodeURIComponent(accessToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
-    `sb-access-token=${encodeURIComponent(accessToken)}${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
+    `votary_session_active=true${domainPart}${sameSitePart}${maxAgePart}${securePart}`,
   ]
 }
 

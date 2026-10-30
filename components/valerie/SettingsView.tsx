@@ -59,7 +59,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnToUrl(window.location.href)
+      setReturnToUrl(window.location.pathname + window.location.search + window.location.hash)
     }
   }, [])
 
@@ -313,7 +313,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
             <span>Why Citizen Verification is Enforced</span>
           </p>
           <p className="text-slate-400">
-            Your vote is placed into a 24-hour sealed lockbox so early numbers cannot influence the community. To ensure fair outcomes and prevent bot manipulation, votes are kept private until tallies open and are only accepted from residents with a verified local resident profile issued by the SunShade Hub.
+            Your vote is placed into a 24-hour sealed lockbox so early numbers cannot influence the community. To ensure fair outcomes and prevent bot manipulation, votes are kept private until tallies open and are only accepted from verified citizens in good standing issued by the SunShade Hub.
           </p>
         </div>
 
@@ -327,7 +327,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
               className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-950/40 px-4 py-3 text-xs font-semibold text-cyan-300 shadow-[0_0_20px_rgba(6,182,212,0.15)] transition-all duration-150 hover:bg-cyan-900/50 hover:text-cyan-200"
             >
               <ShieldCheck className="h-4 w-4" />
-              <span>Complete Single-Human Verification on SunShade Hub</span>
+              <span>Complete Citizen Verification on SunShade Hub</span>
               <ExternalLink className="ml-1 h-4 w-4" />
             </a>
           </div>

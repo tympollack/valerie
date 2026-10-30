@@ -97,9 +97,14 @@ export function BivariatePollCard({
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnUrl(window.location.href)
+      setReturnUrl(window.location.pathname + window.location.search + window.location.hash)
     }
   }, [])
+
+  const callbackUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnUrl || "/")}`
+      : "/auth/callback"
 
   const activeLikert = useMemo(
     () => LIKERT_STEPS.find((s) => s.value === likertScore) || LIKERT_STEPS[2],
@@ -562,11 +567,7 @@ export function BivariatePollCard({
                 {errorMsg.toLowerCase().includes("verification") && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     <a
-                      href={
-                        returnUrl
-                          ? `https://hub.sunshade.icu/login?redirect=${encodeURIComponent(returnUrl)}&verify=true`
-                          : "https://hub.sunshade.icu/dashboard"
-                      }
+                      href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-amber-400"
@@ -585,11 +586,7 @@ export function BivariatePollCard({
                 {errorMsg.toLowerCase().includes("signed in") && (
                   <div className="flex items-center gap-2 pt-1">
                     <a
-                      href={
-                        returnUrl
-                          ? `https://hub.sunshade.icu/login?redirect=${encodeURIComponent(returnUrl)}`
-                          : "https://hub.sunshade.icu/login"
-                      }
+                      href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}`}
                       className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-cyan-400"
                     >
                       <span>Sign In with SunShade Hub</span>

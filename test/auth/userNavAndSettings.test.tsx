@@ -235,7 +235,7 @@ describe("SettingsView Component", () => {
     expect(screen.getByText(/Locked \(Requires Proof\)/i)).toBeInTheDocument()
     expect(screen.getByText("Action Needed")).toBeInTheDocument()
     expect(
-      screen.getByText(/Complete Single-Human Verification on SunShade Hub/i)
+      screen.getByText(/Complete Citizen Verification on SunShade Hub/i)
     ).toBeInTheDocument()
   })
 })
