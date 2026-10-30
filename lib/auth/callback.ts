@@ -38,7 +38,7 @@ export interface ProcessCallbackParams {
   hostname: string
   exchangeCode?: (code: string) => Promise<{ access_token: string; refresh_token?: string } | null>
   setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<void>
-  persistServerSession?: (
+  persistServerSession: (
     accessToken: string,
     refreshToken?: string | null
   ) => Promise<{ success: boolean; error?: string } | void>
@@ -83,6 +83,16 @@ export function sanitizeReturnTo(target: string | null | undefined): string {
 
     if (!isAllowedHost) {
       return "/deliberation"
+    }
+
+    // If destination is an approved subdomain (e.g. deliberation.votary.app or valerie-stag.sunshade.icu),
+    // preserve full URL so cross-subdomain navigation reaches the intended host.
+    const isApexOrLocal =
+      parsed.hostname === "votary.app" ||
+      parsed.hostname === "localhost"
+
+    if (!isApexOrLocal && (parsed.hostname.endsWith(".votary.app") || parsed.hostname.endsWith(".sunshade.icu"))) {
+      return parsed.origin + parsed.pathname + parsed.search + parsed.hash
     }
 
     const safePath = parsed.pathname + parsed.search + parsed.hash
@@ -295,20 +305,25 @@ export async function processCallbackAuthentication({
     // Browser environment safety guard
   }
 
-  if (persistServerSession) {
-    try {
-      const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
-      if (serverRes && typeof serverRes === "object" && !serverRes.success) {
-        return {
-          success: false,
-          error: serverRes.error || "Server session hydration failed",
-        }
-      }
-    } catch (err: any) {
+  if (!persistServerSession) {
+    return {
+      success: false,
+      error: "Server session persistence handler is required to establish authentication",
+    }
+  }
+
+  try {
+    const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
+    if (serverRes && typeof serverRes === "object" && !serverRes.success) {
       return {
         success: false,
-        error: err?.message || "Failed to persist server session",
+        error: serverRes.error || "Server session hydration failed",
       }
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || "Failed to persist server session",
     }
   }
 
