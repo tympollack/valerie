@@ -196,33 +196,33 @@ export function SettingsView({ userContext }: SettingsViewProps) {
         )}
       </div>
 
-      {/* ── 2. Single-Human Anti-Sybil Verification Card ───────────────── */}
+      {/* ── 2. One Person, One Voice (Citizen Verification) Card ─────── */}
       <div className="space-y-5 rounded-2xl border border-cyan-500/30 bg-slate-950/80 p-6 shadow-[0_0_30px_rgba(6,182,212,0.1)] backdrop-blur-xl">
         <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
           <div
             className={cn(
-              "flex h-11 w-11 items-center justify-center rounded-xl font-black shadow-md",
+              "flex h-11 w-11 items-center justify-center rounded-xl font-black shadow-md border",
               userContext.isHumanVerified
-                ? "bg-gradient-to-br from-emerald-400 to-teal-500 text-slate-950"
-                : "bg-gradient-to-br from-amber-500 to-rose-600 text-slate-950"
+                ? "border-emerald-500/40 bg-emerald-950/50 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.15)]"
+                : "border-slate-800 bg-slate-900/80 text-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.1)]"
             )}
           >
             {userContext.isHumanVerified ? (
               <ShieldCheck className="h-6 w-6" />
             ) : (
-              <ShieldAlert className="h-6 w-6" />
+              <ShieldCheck className="h-6 w-6 text-slate-300" />
             )}
           </div>
           <div>
             <h2 className="flex items-center gap-2 text-base font-bold text-slate-100">
-              <span>Anti-Sybil Single-Human Verification</span>
+              <span>One Person, One Voice (Citizen Verification)</span>
               <Badge
                 variant="outline"
                 className={cn(
                   "px-2 py-0.5 font-mono text-[10px]",
                   userContext.isHumanVerified
                     ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300"
-                    : "border-amber-500/40 bg-amber-950/40 text-amber-300"
+                    : "border-slate-700 bg-slate-900/60 text-slate-300"
                 )}
               >
                 {userContext.isHumanVerified
@@ -253,8 +253,8 @@ export function SettingsView({ userContext }: SettingsViewProps) {
                 </>
               ) : (
                 <>
-                  <AlertTriangle className="h-4 w-4 text-amber-400" />
-                  <span className="text-amber-300">
+                  <AlertTriangle className="h-4 w-4 text-slate-400" />
+                  <span className="text-slate-300">
                     Locked (Requires Proof)
                   </span>
                 </>
@@ -264,26 +264,43 @@ export function SettingsView({ userContext }: SettingsViewProps) {
 
           <div className="space-y-1 rounded-xl border border-slate-800 bg-slate-900/50 p-3.5">
             <span className="block text-[11px] text-slate-400">
-              Verification Tier
+              Verification Status
             </span>
-            <span className="font-mono font-semibold text-cyan-300 uppercase">
-              {userContext.verificationTier}
+            <span
+              className={cn(
+                "font-semibold",
+                userContext.isHumanVerified
+                  ? "text-emerald-300"
+                  : "text-amber-300"
+              )}
+            >
+              {userContext.isHumanVerified
+                ? "Verified Resident"
+                : "Action Needed"}
+            </span>
+            <span className="hidden font-mono text-[10px] text-slate-500 uppercase sm:block">
+              Tier: {userContext.verificationTier}
             </span>
           </div>
 
           <div className="space-y-1 rounded-xl border border-slate-800 bg-slate-900/50 p-3.5">
             <span className="block text-[11px] text-slate-400">
-              Trust State
+              Civic Standing
             </span>
             <span
               className={cn(
-                "font-mono font-semibold uppercase",
+                "font-semibold",
                 userContext.trustState === "active"
-                  ? "text-emerald-400"
+                  ? "text-emerald-300"
                   : "text-rose-400"
               )}
             >
-              {userContext.trustState}
+              {userContext.trustState === "active"
+                ? "Good Standing"
+                : "Review Required"}
+            </span>
+            <span className="hidden font-mono text-[10px] text-slate-500 uppercase sm:block">
+              Status: {userContext.trustState}
             </span>
           </div>
         </div>
@@ -292,15 +309,10 @@ export function SettingsView({ userContext }: SettingsViewProps) {
         <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-xs leading-relaxed text-slate-300">
           <p className="flex items-center gap-1.5 font-semibold text-slate-100">
             <Fingerprint className="h-4 w-4 text-cyan-400" />
-            <span>Why Single-Human Verification is Enforced</span>
+            <span>Why Citizen Verification is Enforced</span>
           </p>
           <p className="text-slate-400">
-            Project Valerie utilizes a bivariate commit-and-reveal consensus
-            mechanism where every vote carries both categorical sentiment
-            direction and a continuous conviction weight (0%–100%). To maintain
-            statistical validity and prevent Sybil dilution, votes are
-            cryptographically sealed and only accepted from accounts with
-            verified human nullifiers issued by the SunShade Hub.
+            Your vote is placed into a 24-hour sealed lockbox so early numbers cannot influence the community. To ensure fair outcomes and prevent bot manipulation, votes are kept private until tallies open and are only accepted from residents with a verified local resident profile issued by the SunShade Hub.
           </p>
         </div>
 
@@ -311,7 +323,7 @@ export function SettingsView({ userContext }: SettingsViewProps) {
               href={verifyUrl}
               target="_blank"
               rel="noreferrer"
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 px-4 py-3 text-xs font-bold text-slate-950 shadow-lg transition-all duration-150 hover:opacity-95"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-950/40 px-4 py-3 text-xs font-semibold text-cyan-300 shadow-[0_0_20px_rgba(6,182,212,0.15)] transition-all duration-150 hover:bg-cyan-900/50 hover:text-cyan-200"
             >
               <ShieldCheck className="h-4 w-4" />
               <span>Complete Single-Human Verification on SunShade Hub</span>

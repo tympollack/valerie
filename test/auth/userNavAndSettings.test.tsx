@@ -207,6 +207,12 @@ describe("SettingsView Component", () => {
       screen.getByText(/Eligible \(1 Human, 1 Vote\)/i)
     ).toBeInTheDocument()
     expect(
+      screen.getByText("One Person, One Voice (Citizen Verification)")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/24-hour sealed lockbox/i)
+    ).toBeInTheDocument()
+    expect(
       screen.queryByText(/Complete Single-Human Verification on SunShade Hub/i)
     ).not.toBeInTheDocument()
   })
@@ -226,6 +232,7 @@ describe("SettingsView Component", () => {
 
     expect(screen.getByText(/VERIFICATION REQUIRED/i)).toBeInTheDocument()
     expect(screen.getByText(/Locked \(Requires Proof\)/i)).toBeInTheDocument()
+    expect(screen.getByText("Action Needed")).toBeInTheDocument()
     expect(
       screen.getByText(/Complete Single-Human Verification on SunShade Hub/i)
     ).toBeInTheDocument()
