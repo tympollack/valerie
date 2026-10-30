@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import {
+  decodeJWT,
   extractAntiSybilProof,
   SUNSHADE_COOKIE_NAMES,
   getCrossDomainCookieOptions,
@@ -156,4 +157,104 @@ export async function signOutAction(): Promise<{ success: boolean }> {
 
   revalidatePath("/", "layout")
   return { success: true }
+}
+
+export interface HydrateSessionResult {
+  success: boolean
+  userId: string | null
+  isHumanVerified: boolean
+  error?: string
+}
+
+/**
+ * Hydrates Supabase session and persists authentication cookies across .votary.app or .sunshade.icu.
+ */
+export async function hydrateSessionAction(
+  accessToken: string,
+  refreshToken?: string | null
+): Promise<HydrateSessionResult> {
+  if (!accessToken) {
+    return {
+      success: false,
+      userId: null,
+      isHumanVerified: false,
+      error: "Missing access token",
+    }
+  }
+
+  const payload = decodeJWT(accessToken)
+  if (!payload) {
+    return {
+      success: false,
+      userId: null,
+      isHumanVerified: false,
+      error: "Invalid JWT format",
+    }
+  }
+
+  const proof = extractAntiSybilProof(payload)
+  const userMeta = (payload.user_metadata as Record<string, unknown>) || {}
+  const appMeta = (payload.app_metadata as Record<string, unknown>) || {}
+  const isHumanVerified = Boolean(
+    userMeta.is_human_verified === true ||
+      userMeta.is_human === true ||
+      appMeta.is_human_verified === true ||
+      appMeta.is_human === true ||
+      appMeta.anti_sybil_verified === true ||
+      payload.is_human === true ||
+      payload.anti_sybil_verified === true ||
+      (proof.isHuman && proof.trustState === "active")
+  )
+  const userId = payload.sub || payload.id || payload.user_id || null
+
+  const cookieStore = await cookies()
+  const headerList = await headers()
+  const host = headerList.get("host") || "votary.app"
+  const cookieDomainOpts = getCrossDomainCookieOptions(host)
+
+  const cookieMaxAge = 60 * 60 * 24 * 7 // 7 days
+
+  try {
+    cookieStore.set("sunshade_sso", accessToken, {
+      ...cookieDomainOpts,
+      maxAge: cookieMaxAge,
+    })
+    cookieStore.set("sunshade_sso_token", accessToken, {
+      ...cookieDomainOpts,
+      maxAge: cookieMaxAge,
+    })
+    cookieStore.set("sb-access-token", accessToken, {
+      ...cookieDomainOpts,
+      maxAge: cookieMaxAge,
+    })
+
+    if (refreshToken) {
+      cookieStore.set("sb-refresh-token", refreshToken, {
+        ...cookieDomainOpts,
+        maxAge: cookieMaxAge,
+      })
+    }
+
+    // Also hydrate native Supabase SSR client session
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    if (supabaseUrl && supabaseKey) {
+      const supabase = await createClient(accessToken)
+      if (refreshToken) {
+        await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+      }
+    }
+  } catch {
+    // Non-blocking if in read-only cookie context
+  }
+
+  revalidatePath("/", "layout")
+  return {
+    success: true,
+    userId,
+    isHumanVerified,
+  }
 }

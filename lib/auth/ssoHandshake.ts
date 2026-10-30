@@ -117,13 +117,21 @@ export const SUNSHADE_COOKIE_NAMES = [
 export function getCrossDomainCookieOptions(hostname?: string): CrossDomainCookieOptions {
   const host = (hostname || "").toLowerCase().trim().split(":")[0];
   const isSunShadeDomain = host === "sunshade.icu" || host.endsWith(".sunshade.icu");
+  const isVotaryDomain = host === "votary.app" || host.endsWith(".votary.app");
+
+  let domain: string | undefined = undefined;
+  if (isSunShadeDomain) {
+    domain = ".sunshade.icu";
+  } else if (isVotaryDomain) {
+    domain = ".votary.app";
+  }
 
   return {
     path: "/",
     sameSite: "lax",
     secure: true,
     httpOnly: true,
-    ...(isSunShadeDomain ? { domain: ".sunshade.icu" } : {}),
+    ...(domain ? { domain } : {}),
   };
 }
 

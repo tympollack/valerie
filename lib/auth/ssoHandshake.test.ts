@@ -56,6 +56,24 @@ describe("Cross-Domain SSO & Cookie Parsing (lib/auth/ssoHandshake.ts)", () => {
       });
     });
 
+    it("configures wildcard domain for .votary.app domains", () => {
+      expect(getCrossDomainCookieOptions("votary.app")).toEqual({
+        domain: ".votary.app",
+        path: "/",
+        sameSite: "lax",
+        secure: true,
+        httpOnly: true,
+      });
+
+      expect(getCrossDomainCookieOptions("deliberation.votary.app")).toEqual({
+        domain: ".votary.app",
+        path: "/",
+        sameSite: "lax",
+        secure: true,
+        httpOnly: true,
+      });
+    });
+
     it("omits domain for localhost and IP addresses to prevent browser rejection", () => {
       const localOpts = getCrossDomainCookieOptions("localhost:3000");
       expect(localOpts.domain).toBeUndefined();
