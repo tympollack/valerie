@@ -203,8 +203,15 @@ describe("SettingsView Component", () => {
     expect(screen.getByText(/SSO Connected/i)).toBeInTheDocument()
     expect(screen.getByText(/verified@sunshade.icu/i)).toBeInTheDocument()
     expect(screen.getByText("VERIFIED HUMAN")).toBeInTheDocument()
+    expect(screen.getByText("Verified Citizen")).toBeInTheDocument()
     expect(
       screen.getByText(/Eligible \(1 Human, 1 Vote\)/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("One Person, One Voice (Citizen Verification)")
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/24-hour sealed lockbox/i)
     ).toBeInTheDocument()
     expect(
       screen.queryByText(/Complete Single-Human Verification on SunShade Hub/i)
@@ -226,6 +233,7 @@ describe("SettingsView Component", () => {
 
     expect(screen.getByText(/VERIFICATION REQUIRED/i)).toBeInTheDocument()
     expect(screen.getByText(/Locked \(Requires Proof\)/i)).toBeInTheDocument()
+    expect(screen.getByText("Action Needed")).toBeInTheDocument()
     expect(
       screen.getByText(/Complete Single-Human Verification on SunShade Hub/i)
     ).toBeInTheDocument()

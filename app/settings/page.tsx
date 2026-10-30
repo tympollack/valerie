@@ -35,11 +35,10 @@ export default async function SettingsPage() {
               <span>The Votary Civic Protocol</span>
             </div>
             <h1 className="text-2xl font-extrabold tracking-tight text-slate-100 sm:text-3xl">
-              Account &amp; Single-Human Identity
+              Account &amp; Citizen Identity
             </h1>
             <p className="text-xs text-slate-400 sm:text-sm">
-              Manage your authenticated SunShade Hub session, verify Anti-Sybil
-              single-human credentials, or log out.
+              Manage your authenticated SunShade Hub session, verify citizen credentials, or log out.
             </p>
           </div>
 
@@ -51,8 +50,7 @@ export default async function SettingsPage() {
       {/* Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/90 py-6 text-center text-xs text-slate-500">
         <p>
-          The Votary • Powered by Project Valerie • Cross-domain SSO &amp; Anti-Sybil Human Verification
-          Handshake across .sunshade.icu.
+          The Votary · Verified Civic Consensus Platform · votary.app
         </p>
       </footer>
     </div>
