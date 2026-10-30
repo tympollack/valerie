@@ -63,7 +63,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
   // Safely set the return URL on client mount to prevent empty return_to during SSR
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnToUrl(window.location.href)
+      setReturnToUrl(window.location.pathname + window.location.search + window.location.hash)
     }
   }, [])
 

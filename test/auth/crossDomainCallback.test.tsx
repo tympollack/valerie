@@ -107,12 +107,12 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(tokens.returnTo).toBe("/poll/pol-456")
     })
 
-    it("extracts tokens from query parameters when redirect uses search string", () => {
+    it("rejects tokens in query parameters to prevent credential exposure in URLs/logs", () => {
       const search = `?access_token=${verifiedJWT}&refresh_token=refresh_xyz789&return_to=/settings`
       const tokens = parseCallbackTokens("", search)
 
-      expect(tokens.accessToken).toBe(verifiedJWT)
-      expect(tokens.refreshToken).toBe("refresh_xyz789")
+      expect(tokens.accessToken).toBeNull()
+      expect(tokens.refreshToken).toBeNull()
       expect(tokens.returnTo).toBe("/settings")
     })
 
@@ -132,12 +132,22 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(tokens.errorDescription).toBe("User cancelled verification")
     })
 
-    it("sanitizes open-redirect attempts to local relative paths", () => {
+    it("sanitizes open-redirect attempts to local relative paths while accepting trusted apex domains", () => {
       expect(sanitizeReturnTo("https://evil.com")).toBe("/deliberation")
       expect(sanitizeReturnTo("//malicious-site.com")).toBe("/deliberation")
       expect(sanitizeReturnTo("/\\evil.com")).toBe("/deliberation")
       expect(sanitizeReturnTo("/\n/evil.example")).toBe("/deliberation")
       expect(sanitizeReturnTo("/\r\n/evil.example")).toBe("/deliberation")
+      expect(sanitizeReturnTo("https://votary.app/settings")).toBe("/settings")
+      expect(sanitizeReturnTo("https://deliberation.votary.app/poll/123?active=true#tally")).toBe("https://deliberation.votary.app/poll/123?active=true#tally")
+      // Rejects cross-apex redirects to prevent cookie loss
+      expect(sanitizeReturnTo("https://deliberation.votary.app/poll/123", "valerie.sunshade.icu")).toBe("/deliberation")
+      expect(sanitizeReturnTo("https://valerie-stag.sunshade.icu/poll/123", "valerie.sunshade.icu")).toBe("https://valerie-stag.sunshade.icu/poll/123")
+      // Preserves local relative paths on preview and custom deployments
+      expect(sanitizeReturnTo("/poll/123", "valerie-git-preview-sunshade.vercel.app")).toBe("/poll/123")
+      expect(sanitizeReturnTo("/poll/123?active=true#tally", "preview.custom.net")).toBe("/poll/123?active=true#tally")
+      expect(sanitizeReturnTo("https://preview.custom.net/poll/123", "preview.custom.net")).toBe("/poll/123")
+      expect(sanitizeReturnTo("https://evil.com", "valerie-git-preview-sunshade.vercel.app")).toBe("/deliberation")
       expect(sanitizeReturnTo("/poll/123")).toBe("/poll/123")
       expect(sanitizeReturnTo("")).toBe("/deliberation")
     })
@@ -182,12 +192,12 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
   })
 
   describe("getClientCookieStrings", () => {
-    it("generates cookie strings targeting the .votary.app apex domain without exposing refresh tokens", () => {
+    it("generates safe non-sensitive session presence flag without exposing raw JWTs or refresh tokens", () => {
       const cookies = getClientCookieStrings("mock_token_123", "mock_refresh_456", "votary.app")
 
-      expect(cookies.some((c) => c.startsWith("sunshade_sso=") && c.includes("domain=.votary.app"))).toBe(true)
-      expect(cookies.some((c) => c.startsWith("sunshade_sso_token=") && c.includes("domain=.votary.app"))).toBe(true)
-      expect(cookies.some((c) => c.startsWith("sb-access-token=") && c.includes("domain=.votary.app"))).toBe(true)
+      expect(cookies.some((c) => c.startsWith("votary_session_active=true") && c.includes("domain=.votary.app"))).toBe(true)
+      expect(cookies.some((c) => c.startsWith("sunshade_sso="))).toBe(false)
+      expect(cookies.some((c) => c.startsWith("sb-access-token="))).toBe(false)
       expect(cookies.some((c) => c.startsWith("sb-refresh-token="))).toBe(false)
     })
 
