@@ -63,7 +63,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
   // Safely set the return URL on client mount to prevent empty return_to during SSR
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnToUrl(window.location.href)
+      setReturnToUrl(window.location.pathname + window.location.search + window.location.hash)
     }
   }, [])
 
@@ -160,20 +160,21 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       ? "https://hub.sunshade.icu"
       : "https://hub.sunshade.icu"
 
-  const loginUrl = returnToUrl
-    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}`
-    : `${hubBaseUrl}/login`
-  const verifyUrl = returnToUrl
-    ? `${hubBaseUrl}/login?redirect=${encodeURIComponent(returnToUrl)}&verify=true`
-    : `${hubBaseUrl}/dashboard`
+  const callbackUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/")}`
+      : "/auth/callback"
+
+  const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
+  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`
 
   // 1. Unauthenticated State
   if (!userContext.authenticated) {
     return (
-      <div className={cn("flex items-center gap-2", className)}>
+      <div className={cn("flex shrink-0 items-center gap-2", className)}>
         <Link
           href="/settings"
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/60 text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-300"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/60 text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-300"
           title="Settings & Verification Status"
           aria-label="Settings"
         >
@@ -182,7 +183,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
 
         <a
           href={loginUrl}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 px-3 py-1.5 text-xs font-semibold text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-all duration-150 hover:bg-cyan-900/50 hover:text-cyan-200"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 px-3 py-1.5 text-xs font-semibold text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)] transition-all duration-150 hover:bg-cyan-900/50 hover:text-cyan-200"
         >
           <LogIn className="h-3.5 w-3.5" />
           <span>Sign In</span>
@@ -199,7 +200,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
   ).toUpperCase()
 
   return (
-    <div className={cn("flex items-center gap-2", className)}>
+    <div className={cn("flex shrink-0 items-center gap-2", className)}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <PopoverTrigger
           className="group relative flex cursor-pointer items-center gap-2 rounded-xl border border-cyan-500/30 bg-slate-950/80 px-2 py-1 transition-all duration-200 hover:border-cyan-400/60 hover:bg-cyan-950/30 focus:ring-2 focus:ring-cyan-400 focus:outline-none"

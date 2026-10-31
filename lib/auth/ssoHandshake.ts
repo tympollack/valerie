@@ -117,13 +117,21 @@ export const SUNSHADE_COOKIE_NAMES = [
 export function getCrossDomainCookieOptions(hostname?: string): CrossDomainCookieOptions {
   const host = (hostname || "").toLowerCase().trim().split(":")[0];
   const isSunShadeDomain = host === "sunshade.icu" || host.endsWith(".sunshade.icu");
+  const isVotaryDomain = host === "votary.app" || host.endsWith(".votary.app");
+
+  let domain: string | undefined = undefined;
+  if (isSunShadeDomain) {
+    domain = ".sunshade.icu";
+  } else if (isVotaryDomain) {
+    domain = ".votary.app";
+  }
 
   return {
     path: "/",
     sameSite: "lax",
     secure: true,
     httpOnly: true,
-    ...(isSunShadeDomain ? { domain: ".sunshade.icu" } : {}),
+    ...(domain ? { domain } : {}),
   };
 }
 
@@ -426,7 +434,11 @@ export async function verifySSOToken(
     if (!payload.iss) {
       return { valid: false, error: `Missing required issuer claim (expected ${options.expectedIssuer}).` };
     }
-    if (payload.iss !== options.expectedIssuer) {
+    const isExpectedIssuer =
+      payload.iss === options.expectedIssuer ||
+      (options.expectedIssuer === "https://hub.sunshade.icu" &&
+        (payload.iss.endsWith(".supabase.co/auth/v1") || payload.iss === "supabase" || payload.iss === "https://hub.sunshade.icu"));
+    if (!isExpectedIssuer) {
       return { valid: false, error: `Invalid issuer: expected ${options.expectedIssuer}` };
     }
   }

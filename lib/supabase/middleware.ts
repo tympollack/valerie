@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   getCrossDomainCookieOptions,
   extractAntiSybilProof,
+  extractSSOToken,
   validateSSOHandshake,
   isVotingRoute,
   buildSSOLoginRedirect,
@@ -81,9 +82,23 @@ export async function updateSession(request: NextRequest) {
         error,
       } = await supabase.auth.getUser();
 
+      let resolvedUser = null;
       if (!error && user) {
-        const proof = extractAntiSybilProof(user);
-        userId = user.id;
+        resolvedUser = user;
+      } else {
+        // Fallback for access-only SSO sessions lacking native refresh token cookie
+        const ssoToken = extractSSOToken(request.cookies);
+        if (ssoToken) {
+          const { data: ssoData, error: ssoError } = await supabase.auth.getUser(ssoToken);
+          if (!ssoError && ssoData?.user) {
+            resolvedUser = ssoData.user;
+          }
+        }
+      }
+
+      if (resolvedUser) {
+        const proof = extractAntiSybilProof(resolvedUser);
+        userId = resolvedUser.id;
         isHumanVerified = proof.isHuman && proof.trustState === "active";
         verificationTier = proof.verificationTier;
         trustState = proof.trustState;
