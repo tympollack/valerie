@@ -1,7 +1,7 @@
 /**
  * Project Valerie: Commit-and-Reveal Expiration Alert Worker (Edge Function)
  * File: supabase/functions/valerie-reveal-notifier/index.ts
- * Work Item: [TASK-VAL-SETTINGS-WIRE-NOTIFICATIONS]
+ * Work Item: [TASK-VAL-SETTINGS-WIRE-NOTIFICATIONS] / [TASK-VAL-REVEAL-NOTIF-TRIGGER]
  *
  * Dispatches automated transactional alerts when a citizen's commit-lock expires,
  * inviting them to review unlocked community deliberation distributions.
@@ -13,6 +13,8 @@ import {
   filterAlertsUnderCeiling,
   generateRevealToken,
   renderRevealAlertHtml,
+  classifyCallerStance,
+  computeCommunityTrajectory,
   type PendingRevealCandidate,
 } from "../../lib/valerie/revealNotifier.ts";
 
@@ -21,6 +23,8 @@ export {
   filterAlertsUnderCeiling,
   generateRevealToken,
   renderRevealAlertHtml,
+  classifyCallerStance,
+  computeCommunityTrajectory,
   type PendingRevealCandidate,
 };
 
@@ -31,7 +35,7 @@ const CORS_HEADERS: HeadersInit = {
 };
 
 /**
- * Core processor for scanning expired locks and batch sending reveal alerts.
+ * Core processor for scanning expired locks, compiling stances, and batch sending reveal alerts.
  */
 export async function processRevealNotifier(
   adminClient: SupabaseClient,
@@ -61,17 +65,15 @@ export async function processRevealNotifier(
     Deno.env.get("JWT_SECRET") ||
     "valerie-email-action-token-secret-default";
 
-  // 2. Query expired poll responses within recent window (default: last 1 hour for periodic worker)
-  const windowHours = (options as any).windowHours || 1;
-  const windowStart = new Date(Date.now() - windowHours * 3600 * 1000).toISOString();
+  // 2. Query expired, unnotified poll responses (locked_until <= now() AND reveal_notified = false)
   const nowIso = new Date().toISOString();
 
   const { data: responses, error: respError } = await (adminClient as any)
     .schema("valerie")
     .from("poll_responses")
-    .select("user_id, poll_id, locked_until")
+    .select("user_id, poll_id, locked_until, likert_score, confidence_score, reveal_notified")
     .lte("locked_until", nowIso)
-    .gte("locked_until", windowStart)
+    .eq("reveal_notified", false)
     .limit(500);
 
   if (respError || !Array.isArray(responses) || responses.length === 0) {
@@ -106,9 +108,11 @@ export async function processRevealNotifier(
       userId: r.user_id,
       pollId: r.poll_id,
       lockedUntil: r.locked_until,
+      likertScore: r.likert_score,
+      confidenceScore: r.confidence_score,
     }));
 
-  // 4. Enforce dynamic alert ceiling
+  // 4. Enforce dynamic alert ceiling (max 2 per user per day by default)
   const throttledCandidates = filterAlertsUnderCeiling(
     candidates,
     settings.maxDailyAlertsPerUser
@@ -122,8 +126,40 @@ export async function processRevealNotifier(
     };
   }
 
-  // 5. Build and dispatch email batch
+  // 5. Query poll metadata and aggregate consensus data
+  const pollIds = Array.from(new Set(throttledCandidates.map((c) => c.pollId)));
+  const { data: pollRows } = await (adminClient as any)
+    .schema("valerie")
+    .from("polls")
+    .select("id, title")
+    .in("id", pollIds);
+
+  const pollTitleMap = new Map<string, string>();
+  if (Array.isArray(pollRows)) {
+    for (const p of pollRows) {
+      pollTitleMap.set(p.id, p.title);
+    }
+  }
+
+  // Fetch all unlocked responses for these polls to compute consensus trajectory
+  const { data: allPollResponses } = await (adminClient as any)
+    .schema("valerie")
+    .from("poll_responses")
+    .select("poll_id, likert_score, confidence_score")
+    .in("poll_id", pollIds);
+
+  const pollResponsesMap = new Map<string, Array<{ likert_score: number; confidence_score: number }>>();
+  if (Array.isArray(allPollResponses)) {
+    for (const apr of allPollResponses) {
+      const list = pollResponsesMap.get(apr.poll_id) || [];
+      list.push(apr);
+      pollResponsesMap.set(apr.poll_id, list);
+    }
+  }
+
+  // 6. Build email batch
   const emailsToSend: Array<{ from: string; to: string; subject: string; html: string }> = [];
+  const candidateDispatchedPairs: Array<{ userId: string; pollId: string }> = [];
 
   for (const item of throttledCandidates) {
     try {
@@ -134,25 +170,42 @@ export async function processRevealNotifier(
       const revealUrl = `${appBaseUrl}/poll/${item.pollId}?action_token=${token}`;
       const unsubToken = allowedUserMap.get(item.userId) || "default";
       const unsubscribeUrl = `${appBaseUrl}/api/digest/unsubscribe?token=${unsubToken}`;
+      const pollTitle = pollTitleMap.get(item.pollId) || "Civic Deliberation Poll";
+
+      const callerStance = classifyCallerStance(item.likertScore ?? 0, item.confidenceScore ?? 50);
+      const responsesForPoll = pollResponsesMap.get(item.pollId) || [];
+      const { trajectory, totalVotes, consensusPct, controversyScore } = computeCommunityTrajectory(responsesForPoll);
 
       emailsToSend.push({
         from: `${settings.fromName} <${settings.fromEmail}>`,
         to: userData.user.email,
         subject: "Results Unlocked: Commit-Lock Window Concluded",
         html: renderRevealAlertHtml({
-          pollTitle: "Civic Deliberation Poll",
+          pollTitle,
           revealUrl,
           unsubscribeUrl,
+          stanceArchetype: callerStance,
+          consensusTrajectory: trajectory,
+          lockedUntil: item.lockedUntil,
+          metrics: {
+            totalVotes,
+            consensusPct,
+            controversyScore,
+          },
         }),
       });
+
+      candidateDispatchedPairs.push({ userId: item.userId, pollId: item.pollId });
     } catch {
       // Continue next candidate
     }
   }
 
+  // 7. Dispatch batch through Resend API
+  let dispatchSucceeded = false;
   if (emailsToSend.length > 0 && resendApiKey) {
     try {
-      await fetch("https://api.resend.com/emails/batch", {
+      const res = await fetch("https://api.resend.com/emails/batch", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${resendApiKey}`,
@@ -160,15 +213,39 @@ export async function processRevealNotifier(
         },
         body: JSON.stringify(emailsToSend),
       });
+      if (res.ok) {
+        dispatchSucceeded = true;
+      } else {
+        console.error("[valerie-reveal-notifier] Resend dispatch returned non-200:", res.status);
+      }
     } catch (err) {
       console.error("[valerie-reveal-notifier] Resend dispatch error:", err);
+    }
+  } else if (emailsToSend.length > 0 && !resendApiKey) {
+    // In mock or development environments without an API key
+    dispatchSucceeded = true;
+  }
+
+  // 8. Mark reveal_notified = true to prevent duplicate notifications
+  if (dispatchSucceeded && candidateDispatchedPairs.length > 0) {
+    for (const pair of candidateDispatchedPairs) {
+      try {
+        await (adminClient as any)
+          .schema("valerie")
+          .from("poll_responses")
+          .update({ reveal_notified: true })
+          .eq("poll_id", pair.pollId)
+          .eq("user_id", pair.userId);
+      } catch (err) {
+        console.error("[valerie-reveal-notifier] Failed to mark reveal_notified:", err);
+      }
     }
   }
 
   return {
     status: "success" as const,
     totalEligible: candidates.length,
-    totalDispatched: emailsToSend.length,
+    totalDispatched: dispatchSucceeded ? emailsToSend.length : 0,
   };
 }
 
