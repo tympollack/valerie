@@ -45,6 +45,7 @@ export interface DecreeCompilerSummary {
 
 /**
  * Loads dynamic decree compiler settings from valerie.system_settings.
+ * Fails closed (enabled: false) if database connectivity or settings query fails.
  */
 export async function getDecreeCompilerSettings(
   adminClient: SupabaseClient
@@ -56,7 +57,7 @@ export async function getDecreeCompilerSettings(
         ? (adminClient as any).schema("valerie").from("system_settings")
         : adminClient.from("system_settings");
 
-    const { data } = await target
+    const { data, error } = await target
       .select("key, value")
       .in("key", [
         "decree.cron_enabled",
@@ -64,6 +65,12 @@ export async function getDecreeCompilerSettings(
         "decree_min_constituent_count",
         "decree_supermajority_threshold",
       ]);
+
+    if (error) {
+      console.error("[Project Valerie] Error loading decree compiler settings, failing closed:", error);
+      settings.enabled = false;
+      return settings;
+    }
 
     if (Array.isArray(data)) {
       for (const row of data) {
@@ -76,8 +83,9 @@ export async function getDecreeCompilerSettings(
         }
       }
     }
-  } catch {
-    // Non-blocking fallback to defaults
+  } catch (err) {
+    console.error("[Project Valerie] Exception loading decree compiler settings, failing closed:", err);
+    settings.enabled = false;
   }
   return settings;
 }
@@ -174,24 +182,36 @@ export async function processDecreeCompiler(
 
   for (const poll of candidatePolls) {
     try {
-      // Query votes for this poll
-      const { data: responses, error: respError } = await (adminClient as any)
-        .schema("valerie")
-        .from("poll_responses")
-        .select("locked_until")
-        .eq("poll_id", poll.id);
+      // Query exact total count and locked count via database-side aggregate checks
+      // to avoid 1,000-row API limits and ensure locked votes outside initial page cannot be bypassed
+      const [totalCountRes, lockedCountRes] = await Promise.all([
+        (adminClient as any)
+          .schema("valerie")
+          .from("poll_responses")
+          .select("*", { count: "exact", head: true })
+          .eq("poll_id", poll.id),
+        (adminClient as any)
+          .schema("valerie")
+          .from("poll_responses")
+          .select("*", { count: "exact", head: true })
+          .eq("poll_id", poll.id)
+          .gt("locked_until", nowIso),
+      ]);
 
-      if (respError || !Array.isArray(responses)) {
+      if (totalCountRes.error || lockedCountRes.error) {
+        const queryErr = totalCountRes.error?.message || lockedCountRes.error?.message;
         results.push({
           pollId: poll.id,
           questionText: poll.question_text,
           success: false,
-          reason: `QUERY_ERROR: ${respError?.message || "Failed to load responses"}`,
+          reason: `QUERY_ERROR: ${queryErr || "Failed to load vote counts"}`,
         });
         continue;
       }
 
-      const totalVotes = responses.length;
+      const totalVotes = totalCountRes.count ?? 0;
+      const lockedCount = lockedCountRes.count ?? 0;
+
       if (totalVotes < settings.minConstituentCount) {
         results.push({
           pollId: poll.id,
@@ -202,10 +222,6 @@ export async function processDecreeCompiler(
         });
         continue;
       }
-
-      const lockedCount = responses.filter(
-        (r: any) => r.locked_until && r.locked_until > nowIso
-      ).length;
 
       if (lockedCount > 0) {
         results.push({
@@ -219,19 +235,19 @@ export async function processDecreeCompiler(
       }
 
       // If dry-run, report eligible without invoking mutating RPC
+      // Note: Dry-run checks eligibility pre-flight only; compiledDecrees remains 0 until actual RPC execution.
       if (options.dryRun) {
         results.push({
           pollId: poll.id,
           questionText: poll.question_text,
           success: true,
           totalVotes,
-          reason: "DRY_RUN_ELIGIBLE: Poll is unlocked and meets participation threshold",
+          reason: "DRY_RUN_ELIGIBLE: Poll is unlocked and meets participation threshold (pre-consensus evaluation)",
         });
-        compiledCount++;
         continue;
       }
 
-      // Invoke compile_sovereign_decree RPC
+      // Invoke compile_sovereign_decree RPC (defined in migration 20261029040000_valerie_dynamic_settings_hardening.sql)
       const target =
         typeof (adminClient as any).schema === "function"
           ? (adminClient as any).schema("valerie")

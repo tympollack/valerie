@@ -11,6 +11,19 @@ import {
   DEFAULT_DECREE_SETTINGS,
 } from "../../lib/valerie/decreeCompilerRunner";
 
+function mockPollResponsesQuery(totalCount: number, lockedCount: number, queryError: any = null) {
+  return {
+    eq: vi.fn().mockReturnValue({
+      gt: vi.fn().mockResolvedValue({
+        count: lockedCount,
+        error: queryError,
+      }),
+      then: (resolve: any, reject: any) =>
+        Promise.resolve({ count: totalCount, error: queryError }).then(resolve, reject),
+    }),
+  };
+}
+
 describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -55,6 +68,39 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
       expect(settings.enabled).toBe(false);
       expect(settings.minConstituentCount).toBe(100);
       expect(settings.supermajorityThreshold).toBe(0.65);
+    });
+
+    it("fails closed (enabled: false) when system_settings query returns an error", async () => {
+      const mockClient = {
+        schema: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              in: vi.fn().mockResolvedValue({
+                data: null,
+                error: { message: "connection to system_settings failed" },
+              }),
+            }),
+          }),
+        }),
+      } as any;
+
+      const settings = await getDecreeCompilerSettings(mockClient);
+      expect(settings.enabled).toBe(false);
+    });
+
+    it("fails closed (enabled: false) when system_settings query throws an exception", async () => {
+      const mockClient = {
+        schema: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              in: vi.fn().mockRejectedValue(new Error("Database crash")),
+            }),
+          }),
+        }),
+      } as any;
+
+      const settings = await getDecreeCompilerSettings(mockClient);
+      expect(settings.enabled).toBe(false);
     });
   });
 
@@ -160,10 +206,6 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
       const mockPolls = [
         { id: "poll-low-participation", question_text: "Low Participation Poll", is_active: true },
       ];
-      // Only 50 responses
-      const mockResponses = Array.from({ length: 50 }, () => ({
-        locked_until: "2026-10-30T10:00:00.000Z",
-      }));
 
       const mockClient = {
         schema: vi.fn().mockImplementation(() => ({
@@ -191,9 +233,7 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
             }
             if (table === "poll_responses") {
               return {
-                select: vi.fn().mockReturnValue({
-                  eq: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
-                }),
+                select: vi.fn().mockReturnValue(mockPollResponsesQuery(50, 0)),
               };
             }
             return {};
@@ -212,11 +252,6 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
       const mockPolls = [
         { id: "poll-locked-window", question_text: "Locked Window Poll", is_active: true },
       ];
-      // 260 votes, but 10 votes are still locked in the future
-      const mockResponses = [
-        ...Array.from({ length: 250 }, () => ({ locked_until: "2026-10-30T10:00:00.000Z" })),
-        ...Array.from({ length: 10 }, () => ({ locked_until: "2026-11-01T12:00:00.000Z" })),
-      ];
 
       const mockClient = {
         schema: vi.fn().mockImplementation(() => ({
@@ -244,9 +279,7 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
             }
             if (table === "poll_responses") {
               return {
-                select: vi.fn().mockReturnValue({
-                  eq: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
-                }),
+                select: vi.fn().mockReturnValue(mockPollResponsesQuery(260, 10)),
               };
             }
             return {};
@@ -265,9 +298,6 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
       const mockPolls = [
         { id: "poll-supermajority", question_text: "Clean Energy Transition Mandate", is_active: true },
       ];
-      const mockResponses = Array.from({ length: 300 }, () => ({
-        locked_until: "2026-10-30T10:00:00.000Z", // All expired in past
-      }));
 
       const mockRpcResponse = {
         success: true,
@@ -305,9 +335,7 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
             }
             if (table === "poll_responses") {
               return {
-                select: vi.fn().mockReturnValue({
-                  eq: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
-                }),
+                select: vi.fn().mockReturnValue(mockPollResponsesQuery(300, 0)),
               };
             }
             return {};
@@ -333,13 +361,10 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
       expect(decreeResult.merkleRootHash).toBe("a1b2c3d4e5f67890123456789abcdef0");
     });
 
-    it("handles dry-run mode without invoking mutating RPC", async () => {
+    it("handles dry-run mode without invoking mutating RPC and keeps compiledDecrees 0", async () => {
       const mockPolls = [
         { id: "poll-dry-run", question_text: "Dry Run Mandate", is_active: true },
       ];
-      const mockResponses = Array.from({ length: 300 }, () => ({
-        locked_until: "2026-10-30T10:00:00.000Z",
-      }));
       const mockRpc = vi.fn();
 
       const mockClient = {
@@ -368,9 +393,7 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
             }
             if (table === "poll_responses") {
               return {
-                select: vi.fn().mockReturnValue({
-                  eq: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
-                }),
+                select: vi.fn().mockReturnValue(mockPollResponsesQuery(300, 0)),
               };
             }
             return {};
@@ -385,7 +408,7 @@ describe("Sovereign Decree Compiler Runner (TASK-VAL-DECREE-COMPILER-RUNNER)", (
       });
 
       expect(result.status).toBe("success");
-      expect(result.compiledDecrees).toBe(1);
+      expect(result.compiledDecrees).toBe(0); // Dry-run does not write decrees
       expect(mockRpc).not.toHaveBeenCalled();
       expect(result.results[0].reason).toContain("DRY_RUN_ELIGIBLE");
     });

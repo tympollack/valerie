@@ -39,8 +39,8 @@ Deno.serve(async (req: Request) => {
 
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
   const cronSecret = Deno.env.get("CRON_SECRET") || Deno.env.get("WORKER_AUTH_TOKEN");
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return new Response(JSON.stringify({ error: "Unauthorized worker invocation" }), {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+    return new Response(JSON.stringify({ error: "Unauthorized worker invocation: missing or invalid worker secret" }), {
       status: 401,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     });

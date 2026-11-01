@@ -13,6 +13,7 @@
   },
   "vars": {
     "HERALD_AGENT_ENDPOINT": "https://rweehbzsflhhtwjrjnvy.supabase.co/functions/v1/valerie-herald-agent",
+    "DECREE_CRON_ENDPOINT": "https://rweehbzsflhhtwjrjnvy.supabase.co/functions/v1/valerie-decree-cron",
     "MIN_CONTROVERSY_DISPERSION": "0.27",
     "DEFAULT_SCOPE_TIER": "NATIONAL",
     "DEFAULT_LOCALE": "US",
