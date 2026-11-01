@@ -2,6 +2,10 @@ import { createClient } from "@/lib/supabase/server"
 import { getCurrentUserContext } from "@/app/actions/auth"
 import { Header } from "@/components/nav/Header"
 import { BivariatePollCard } from "@/components/valerie/BivariatePollCard"
+import {
+  getClusterPacketAction,
+  type ClusterPacketPayload,
+} from "@/app/actions/valeriePacketActions"
 import { Compass } from "lucide-react"
 
 export const dynamic = "force-dynamic"
@@ -21,6 +25,8 @@ export default async function Page() {
       trustState: "active" as const,
     }
   }
+
+  let packet: ClusterPacketPayload | null = null
   let activePoll: {
     id: string
     question_text: string
@@ -33,21 +39,31 @@ export default async function Page() {
   let historicalBaseline: { mean: number; stddev: number } | null = null
 
   try {
-    const supabase = await createClient()
-    const { data: poll } = await supabase
-      .schema("valerie")
-      .from("polls")
-      .select("id, question_text, axis_category, detected_locales, target_locale_code, related_ecosystem_refs")
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    const packetResult = await getClusterPacketAction({
+      userId: userContext.userId,
+    })
 
-    if (poll) {
-      activePoll = poll
+    if (packetResult.success && packetResult.data.anchor_poll) {
+      packet = packetResult.data
+      activePoll = packetResult.data.anchor_poll
+    } else {
+      const supabase = await createClient()
+      const { data: poll } = await supabase
+        .schema("valerie")
+        .from("polls")
+        .select("id, question_text, axis_category, detected_locales, target_locale_code, related_ecosystem_refs")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (poll) {
+        activePoll = poll
+      }
     }
 
     if (userContext.authenticated && userContext.userId) {
+      const supabase = await createClient()
       const { data: metrics } = await supabase
         .schema("valerie")
         .rpc("calculate_user_stance_metrics", {
@@ -105,6 +121,9 @@ export default async function Page() {
               pollId={activePoll.id}
               questionText={activePoll.question_text}
               category={activePoll.axis_category || "Civic Deliberation & Policy"}
+              companionPolls={packet?.companion_polls}
+              packetId={packet?.packet_id ?? undefined}
+              isSurge={packet?.is_surge ?? false}
               relatedEcosystemRefs={activePoll.related_ecosystem_refs}
               detectedLocales={activePoll.detected_locales ?? undefined}
               targetLocaleCode={activePoll.target_locale_code ?? undefined}
