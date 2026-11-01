@@ -2,6 +2,11 @@ import { createClient } from "@/lib/supabase/server"
 import { getCurrentUserContext } from "@/app/actions/auth"
 import { Header } from "@/components/nav/Header"
 import { BivariatePollCard } from "@/components/valerie/BivariatePollCard"
+import { ChapterEndCard } from "@/components/valerie/ChapterEndCard"
+import {
+  getClusterPacketAction,
+  type ClusterPacketPayload,
+} from "@/app/actions/valeriePacketActions"
 import { Compass } from "lucide-react"
 
 export const dynamic = "force-dynamic"
@@ -21,6 +26,8 @@ export default async function Page() {
       trustState: "active" as const,
     }
   }
+
+  let packet: ClusterPacketPayload | null = null
   let activePoll: {
     id: string
     question_text: string
@@ -31,23 +38,40 @@ export default async function Page() {
   } | null = null
   let historicalZScore: number | null = null
   let historicalBaseline: { mean: number; stddev: number } | null = null
+  let isDistrictCompleted = false
 
   try {
-    const supabase = await createClient()
-    const { data: poll } = await supabase
-      .schema("valerie")
-      .from("polls")
-      .select("id, question_text, axis_category, detected_locales, target_locale_code, related_ecosystem_refs")
-      .eq("is_active", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    const packetResult = await getClusterPacketAction({
+      userId: userContext.userId,
+    })
 
-    if (poll) {
-      activePoll = poll
+    if (packetResult.success) {
+      if (packetResult.data.anchor_poll) {
+        packet = packetResult.data
+        activePoll = packetResult.data.anchor_poll
+      } else {
+        // Voter has completed active measures in district (BUG_0001 guard)
+        isDistrictCompleted = Boolean(userContext.authenticated)
+      }
+    } else {
+      // Degraded fallback: only query single poll if packet RPC & fallback both failed
+      const supabase = await createClient()
+      const { data: poll } = await supabase
+        .schema("valerie")
+        .from("polls")
+        .select("id, question_text, axis_category, detected_locales, target_locale_code, related_ecosystem_refs")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (poll) {
+        activePoll = poll
+      }
     }
 
     if (userContext.authenticated && userContext.userId) {
+      const supabase = await createClient()
       const { data: metrics } = await supabase
         .schema("valerie")
         .rpc("calculate_user_stance_metrics", {
@@ -99,17 +123,25 @@ export default async function Page() {
             </div>
           </div>
 
-          {/* Primary Bivariate Poll Card or Empty State */}
+          {/* Primary Bivariate Poll Card, Completed District Off-Ramp, or Empty State */}
           {activePoll ? (
             <BivariatePollCard
               pollId={activePoll.id}
               questionText={activePoll.question_text}
               category={activePoll.axis_category || "Civic Deliberation & Policy"}
+              companionPolls={packet?.companion_polls}
+              packetId={packet?.packet_id ?? undefined}
+              isSurge={packet?.is_surge ?? false}
               relatedEcosystemRefs={activePoll.related_ecosystem_refs}
               detectedLocales={activePoll.detected_locales ?? undefined}
               targetLocaleCode={activePoll.target_locale_code ?? undefined}
               historicalZScore={historicalZScore}
               historicalBaseline={historicalBaseline}
+            />
+          ) : isDistrictCompleted ? (
+            <ChapterEndCard
+              message="You have weighed in on all active measures in this district today. Your voice is sealed."
+              totalCompleted={3}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800/80 bg-slate-950/80 p-8 text-center backdrop-blur-xl space-y-4 shadow-[0_0_25px_rgba(6,182,212,0.05)]">
