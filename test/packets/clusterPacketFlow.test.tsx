@@ -143,16 +143,30 @@ describe("BivariatePollCard Sequential Packet Flow & Cadence Off-Ramp", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Civic Packet Complete • 3 Measures Sealed/i)).toBeInTheDocument();
 
-    // Verify "Review Packet" button resets session to Step 1
-    const reviewBtn = screen.getByRole("button", { name: /Review Packet/i });
-    act(() => {
-      fireEvent.click(reviewBtn);
+    expect(screen.getByRole("link", { name: /Explore Community Results/i })).toBeInTheDocument();
+  });
+
+  it("completes single-measure packet cleanly when packetId is provided", async () => {
+    const onPacketComplete = vi.fn();
+
+    render(
+      <BivariatePollCard
+        pollId="poll-single-1"
+        packetId="pkt-standalone"
+        questionText="Standalone emergency ballot measure?"
+        onPacketComplete={onPacketComplete}
+      />
+    );
+
+    const commitBtn = screen.getByRole("button", { name: /Commit & Seal Bivariate Vote/i });
+    await act(async () => {
+      fireEvent.click(commitBtn);
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("packet-step-badge")).toHaveTextContent("Step 1 of 3");
-      expect(screen.getByText(/Should the city fund 24\/7 subway frequency\?/i)).toBeInTheDocument();
+      expect(screen.getByTestId("chapter-end-card")).toBeInTheDocument();
     });
+    expect(onPacketComplete).toHaveBeenCalledTimes(1);
   });
 
   it("completes packet when challenging premise on the final companion measure", async () => {
@@ -177,6 +191,10 @@ describe("BivariatePollCard Sequential Packet Flow & Cadence Off-Ramp", () => {
     const advanceBtn = await screen.findByRole("button", { name: /Continue/i });
     act(() => {
       fireEvent.click(advanceBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("packet-step-badge")).toHaveTextContent("Step 2 of 2");
     });
 
     // Open challenge drawer on step 2

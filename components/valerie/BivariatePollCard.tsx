@@ -223,7 +223,7 @@ export function BivariatePollCard({
           setLockedUntil(unlockTime)
           setIsSubmitted(true)
           onVoteSuccess?.({ likertScore, confidenceScore, comment })
-          if (hasCompanions && activePacketIndex === totalPacketPolls - 1) {
+          if ((hasCompanions || packetId) && activePacketIndex === totalPacketPolls - 1) {
             setIsPacketComplete(true)
             onPacketComplete?.()
           }
@@ -252,6 +252,7 @@ export function BivariatePollCard({
     comment,
     onVoteSuccess,
     hasCompanions,
+    packetId,
     activePacketIndex,
     totalPacketPolls,
     onPacketComplete,
@@ -285,7 +286,7 @@ export function BivariatePollCard({
               flagReason: reason,
               suggestedAxisComment: missingAxisText,
             })
-            if (hasCompanions && activePacketIndex === totalPacketPolls - 1) {
+            if ((hasCompanions || packetId) && activePacketIndex === totalPacketPolls - 1) {
               setIsPacketComplete(true)
               onPacketComplete?.()
             }
@@ -312,6 +313,7 @@ export function BivariatePollCard({
       currentPollId,
       onFlagSuccess,
       hasCompanions,
+      packetId,
       activePacketIndex,
       totalPacketPolls,
       onPacketComplete,
@@ -324,17 +326,6 @@ export function BivariatePollCard({
         <ChapterEndCard
           message="You have weighed in on all active measures in this district today. Your voice is sealed."
           totalCompleted={totalPacketPolls}
-          onResetSession={() => {
-            setActivePacketIndex(0)
-            setIsPacketComplete(false)
-            setIsSubmitted(false)
-            setLikertScore(0)
-            setConfidenceScore(75)
-            setComment("")
-            setHasInteractedLikert(false)
-            setUserChallenge(null)
-            setErrorMsg(null)
-          }}
         />
       </div>
     )

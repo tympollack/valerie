@@ -3,30 +3,71 @@ import { getClusterPacketAction } from "@/app/actions/valeriePacketActions";
 
 let mockRpcResult: any = { data: null, error: null };
 let mockPollsQueryResult: any = { data: [], error: null };
+let mockUser: any = { id: "usr-456" };
 
 const mockRpc = vi.fn(async (rpcName: string, params: any) => {
   return mockRpcResult;
 });
 
-const mockSelect = vi.fn(() => ({
-  eq: vi.fn(() => ({
-    order: vi.fn(() => ({
-      limit: vi.fn(async () => mockPollsQueryResult),
-    })),
-  })),
-}));
+const createChainableQuery = () => {
+  const chain: any = {
+    eq: vi.fn(() => chain),
+    not: vi.fn(() => chain),
+    order: vi.fn(() => chain),
+    limit: vi.fn(async () => mockPollsQueryResult),
+  };
+  return chain;
+};
 
-const mockFrom = vi.fn((tableName: string) => ({
-  select: mockSelect,
-}));
+const mockFrom = vi.fn((tableName: string) => {
+  if (tableName === "poll_responses") {
+    return {
+      select: vi.fn(() => ({
+        eq: vi.fn(async () => ({ data: [], error: null })),
+      })),
+    };
+  }
+  return {
+    select: vi.fn(() => createChainableQuery()),
+  };
+});
 
 const mockSchema = vi.fn(() => ({
   rpc: mockRpc,
   from: mockFrom,
 }));
 
+vi.mock("next/headers", () => ({
+  cookies: vi.fn(async () => ({
+    getAll: () => [],
+    get: () => undefined,
+  })),
+  headers: vi.fn(async () => ({
+    get: () => null,
+  })),
+}));
+
+vi.mock("@/lib/auth/ssoHandshake", () => ({
+  extractSSOToken: vi.fn(() => null),
+}));
+
+vi.mock("@/lib/geo/resolveVoterLocale", () => ({
+  resolveVoterLocale: vi.fn(async () => ({
+    country_iso: "US",
+    admin1_code: "US-OH",
+    admin2_code: "Franklin",
+    h3_res7: "87283472bffffff",
+  })),
+}));
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
+    auth: {
+      getUser: vi.fn(async () => ({
+        data: { user: mockUser },
+        error: mockUser ? null : new Error("Not signed in"),
+      })),
+    },
     schema: mockSchema,
     rpc: mockRpc,
     from: mockFrom,
@@ -38,6 +79,7 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
     vi.clearAllMocks();
     mockRpcResult = { data: null, error: null };
     mockPollsQueryResult = { data: [], error: null };
+    mockUser = { id: "usr-456" };
   });
 
   it("successfully invokes assemble_cluster_packet RPC and unpacks emergency surge packet", async () => {
@@ -87,6 +129,17 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
     });
   });
 
+  it("blocks unauthorized query when caller passes different userId than authenticated session (SEC_0001)", async () => {
+    mockUser = { id: "usr-legit" };
+
+    const result = await getClusterPacketAction({
+      userId: "usr-impostor",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Unauthorized user query");
+  });
+
   it("gracefully falls back to polls table query when RPC fails", async () => {
     mockRpcResult = { data: null, error: { message: "function valerie.assemble_cluster_packet does not exist" } };
     mockPollsQueryResult = {
@@ -95,18 +148,20 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
           id: "poll-fb-1",
           question_text: "Fallback Question 1",
           axis_category: "Governance",
+          cluster_id: "clust-1",
         },
         {
           id: "poll-fb-2",
           question_text: "Fallback Question 2",
-          axis_category: "Environment",
+          axis_category: "Governance",
+          cluster_id: "clust-1",
         },
       ],
       error: null,
     };
 
     const result = await getClusterPacketAction({
-      userId: "usr-999",
+      userId: "usr-456",
     });
 
     expect(result.success).toBe(true);

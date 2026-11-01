@@ -12,6 +12,9 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
+import { extractSSOToken } from "@/lib/auth/ssoHandshake";
+import { resolveVoterLocale } from "@/lib/geo/resolveVoterLocale";
 
 export interface PacketPollItem {
   id: string;
@@ -22,6 +25,7 @@ export interface PacketPollItem {
   cluster_id?: string | null;
   target_locale_code?: string | null;
   h3_res7?: string | null;
+  related_ecosystem_refs?: Record<string, unknown> | null;
   created_at?: string;
 }
 
@@ -61,7 +65,35 @@ export async function getClusterPacketAction(options: {
   userId?: string | null;
 } = {}): Promise<GetClusterPacketResult> {
   try {
-    const supabase = await createClient();
+    const cookieStore = await cookies();
+    const ssoToken = extractSSOToken(cookieStore);
+    const supabase = await createClient(ssoToken);
+
+    // Securely resolve voter ID from authenticated session (SEC_0001 guard)
+    let verifiedUserId: string | null = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) {
+        verifiedUserId = user.id;
+      }
+    } catch {
+      // Unauthenticated visitor
+    }
+
+    // If caller provided a userId, ensure it does not spoof another user
+    if (options.userId && verifiedUserId && options.userId !== verifiedUserId) {
+      console.warn("[Project Valerie] Blocked attempt to query another user's deliberation packet");
+      return { success: false, data: EMPTY_PACKET, error: "Unauthorized user query." };
+    }
+
+    // Securely resolve geographic tier from trusted edge headers (SEC_0002 guard)
+    let verifiedH3: string | null = null;
+    try {
+      const voterLocale = await resolveVoterLocale();
+      verifiedH3 = voterLocale.h3_res7 || options.h3Cell || null;
+    } catch {
+      verifiedH3 = options.h3Cell || null;
+    }
 
     // Invoke valerie.assemble_cluster_packet RPC
     const target =
@@ -70,13 +102,16 @@ export async function getClusterPacketAction(options: {
         : supabase;
 
     const { data, error } = await target.rpc("assemble_cluster_packet", {
-      p_user_id: options.userId || null,
-      p_h3_cell: options.h3Cell || null,
+      p_user_id: verifiedUserId || options.userId || null,
+      p_h3_cell: verifiedH3,
     });
 
     if (error) {
       console.warn("[Project Valerie] assemble_cluster_packet RPC error, falling back to query:", error);
-      return await fallbackPacketQuery(supabase, options);
+      return await fallbackPacketQuery(supabase, {
+        userId: verifiedUserId || options.userId || null,
+        h3Cell: verifiedH3,
+      });
     }
 
     if (data && typeof data === "object") {
@@ -113,6 +148,7 @@ export async function getClusterPacketAction(options: {
 
 /**
  * Graceful fallback query when RPC is pending database deployment in staging/local environments.
+ * Strictly respects unvoted eligibility and thematic cluster linkage (BUG_0002, BUG_0005).
  */
 async function fallbackPacketQuery(
   supabase: any,
@@ -122,10 +158,32 @@ async function fallbackPacketQuery(
     const target =
       typeof supabase.schema === "function" ? supabase.schema("valerie") : supabase;
 
-    const { data: polls, error } = await target
+    // Check for already voted polls to prevent duplicate ballot presentation
+    let votedPollIds: string[] = [];
+    if (options.userId) {
+      const { data: userVotes } = await target
+        .from("poll_responses")
+        .select("poll_id")
+        .eq("user_id", options.userId);
+      if (Array.isArray(userVotes) && userVotes.length > 0) {
+        votedPollIds = userVotes.map((v: any) => v.poll_id).filter(Boolean);
+      }
+    }
+
+    let query = target
       .from("polls")
-      .select("id, question_text, axis_category, detected_locales, target_locale_code, h3_res7, created_at")
-      .eq("is_active", true)
+      .select("id, question_text, axis_category, detected_locales, target_locale_code, h3_res7, related_ecosystem_refs, cluster_id, material_domain, created_at")
+      .eq("is_active", true);
+
+    if (votedPollIds.length > 0) {
+      query = query.not("id", "in", `(${votedPollIds.join(",")})`);
+    }
+
+    if (options.h3Cell) {
+      query = query.eq("h3_res7", options.h3Cell);
+    }
+
+    const { data: polls, error } = await query
       .order("created_at", { ascending: false })
       .limit(3);
 
@@ -134,7 +192,13 @@ async function fallbackPacketQuery(
     }
 
     const anchor = polls[0];
-    const companions = polls.slice(1);
+    // Only group companion polls that actually share the anchor's cluster or material domain
+    const companions = polls
+      .slice(1)
+      .filter((p: any) =>
+        (anchor.cluster_id && p.cluster_id === anchor.cluster_id) ||
+        (anchor.material_domain && p.material_domain === anchor.material_domain)
+      );
 
     return {
       success: true,
@@ -143,7 +207,7 @@ async function fallbackPacketQuery(
         is_surge: false,
         anchor_poll: anchor,
         companion_polls: companions,
-        total_packet_polls: polls.length,
+        total_packet_polls: 1 + companions.length,
       },
     };
   } catch {
