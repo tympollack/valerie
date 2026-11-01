@@ -21,7 +21,7 @@ import { ValerieTooltip } from "@/components/valerie/ValerieTooltip"
 import { RevealGate, type BivariateVote } from "@/components/valerie/RevealGate"
 import type { LocaleGranularity, LocaleSentimentRecord } from "@/app/actions/valerieLocaleActions"
 import { PremiseChallengeDrawer } from "@/components/valerie/PremiseChallengeDrawer"
-import { castVote } from "@/app/actions/vote"
+import { castVote } from "@/app/actions/valerieVoteActions"
 import { flagPollWithCommitGate, type FlagReason } from "@/app/actions/valerieFlagActions"
 import {
   getStanceArchetype,
@@ -231,6 +231,7 @@ export function BivariatePollCard({
           setErrorMsg(result.error || "Failed to commit vote.")
         }
       } catch (err) {
+        console.error("[Project Valerie] castVote invocation error:", err)
         let errorText =
           err instanceof Error
             ? err.message

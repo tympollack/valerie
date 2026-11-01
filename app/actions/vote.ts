@@ -10,6 +10,7 @@
 
 import {
   submitVote as executeSubmitVote,
+  castVote as executeCastVote,
   type VotePayload,
   type VoteResult,
 } from "./valerieVoteActions";
@@ -33,7 +34,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
 
 export async function castVote(payload: VotePayload): Promise<VoteResult> {
   try {
-    return await executeSubmitVote(payload);
+    return await executeCastVote(payload);
   } catch (err: unknown) {
     console.error("[Project Valerie] Error proxying castVote:", err);
     return {

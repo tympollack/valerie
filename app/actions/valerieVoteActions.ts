@@ -186,7 +186,7 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
         locked_until:     computedLockedUntil,
       })
       .select("id, locked_until")
-      .single();
+      .maybeSingle();
 
     if (insertError) {
       // PostgreSQL error code 23505 = unique_violation
@@ -202,6 +202,21 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
         return {
           success: false,
           error: "Vote rejected: Your account must have active human verification.",
+        };
+      }
+
+      // Database trigger custom exceptions (e.g. 22023 from trg_set_vote_lock_duration)
+      if (insertError.message?.includes("POLL_CLOSED")) {
+        return {
+          success: false,
+          error: "Voting has ended for this civic measure.",
+        };
+      }
+
+      if (insertError.message?.includes("POLL_SEALED")) {
+        return {
+          success: false,
+          error: "This measure has already been sealed into a Sovereign Decree.",
         };
       }
 
@@ -259,5 +274,10 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
 /**
  * Server Action alias matching task specification:
  * castVote({ pollId, likertScore, confidenceScore, comment })
+ *
+ * Implemented as an explicit async function declaration to comply with React 19
+ * and Next.js Server Action manifest compilation requirements.
  */
-export const castVote = submitVote;
+export async function castVote(payload: VotePayload): Promise<VoteResult> {
+  return submitVote(payload);
+}

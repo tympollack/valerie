@@ -30,6 +30,7 @@ const mockInsert = vi.fn((payload: any) => {
   return {
     select: vi.fn(() => ({
       single: vi.fn(async () => mockInsertResult),
+      maybeSingle: vi.fn(async () => mockInsertResult),
     })),
   };
 });
@@ -231,6 +232,38 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("already voted");
+  });
+
+  it("handles POLL_CLOSED database trigger exceptions cleanly", async () => {
+    mockInsertResult = {
+      data: null,
+      error: { code: "22023", message: "POLL_CLOSED: Voting is closed for this poll." },
+    };
+
+    const result = await castVote({
+      pollId: "poll-uuid-closed",
+      likertScore: 1,
+      confidenceScore: 50,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Voting has ended for this civic measure.");
+  });
+
+  it("handles POLL_SEALED database trigger exceptions cleanly", async () => {
+    mockInsertResult = {
+      data: null,
+      error: { code: "22023", message: "POLL_SEALED: A sovereign decree has already been sealed for this poll." },
+    };
+
+    const result = await castVote({
+      pollId: "poll-uuid-sealed",
+      likertScore: -1,
+      confidenceScore: 80,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("This measure has already been sealed into a Sovereign Decree.");
   });
 
   it("recovers gracefully from unexpected exceptions without bubbling up unhandled errors", async () => {

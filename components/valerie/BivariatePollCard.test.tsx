@@ -7,6 +7,11 @@ const mockSubmitVote = vi.fn();
 const mockFlagPollWithCommitGate = vi.fn();
 
 // Mock server actions
+vi.mock("@/app/actions/valerieVoteActions", () => ({
+  castVote: (...args: any[]) => mockCastVote(...args),
+  submitVote: (...args: any[]) => mockSubmitVote(...args),
+}));
+
 vi.mock("@/app/actions/vote", () => ({
   castVote: (...args: any[]) => mockCastVote(...args),
   submitVote: (...args: any[]) => mockSubmitVote(...args),

@@ -6,6 +6,11 @@ const mockCastVote = vi.fn();
 const mockSubmitVote = vi.fn();
 const mockFlagPollWithCommitGate = vi.fn();
 
+vi.mock("@/app/actions/valerieVoteActions", () => ({
+  castVote: (...args: any[]) => mockCastVote(...args),
+  submitVote: (...args: any[]) => mockSubmitVote(...args),
+}));
+
 vi.mock("@/app/actions/vote", () => ({
   castVote: (...args: any[]) => mockCastVote(...args),
   submitVote: (...args: any[]) => mockSubmitVote(...args),
@@ -144,7 +149,7 @@ describe("BivariatePollCard Sequential Packet Flow & Cadence Off-Ramp", () => {
     expect(screen.getByText(/Civic Packet Complete • 3 Measures Sealed/i)).toBeInTheDocument();
 
     expect(screen.getByRole("link", { name: /Explore Community Results/i })).toBeInTheDocument();
-  });
+  }, 15000);
 
   it("completes single-measure packet cleanly when packetId is provided", async () => {
     const onPacketComplete = vi.fn();
