@@ -97,6 +97,7 @@ if (!skipEdge) {
     { name: "valerie-cluster-engine", flags: ["--no-verify-jwt"] },
     { name: "simplify-word", flags: [] },
     { name: "assemble-digest", flags: [] },
+    { name: "valerie-reveal-notifier", flags: [] },
   ];
 
   for (const fn of edgeFunctions) {

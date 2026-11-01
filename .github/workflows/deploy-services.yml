@@ -105,6 +105,13 @@ jobs:
           supabase functions deploy simplify-word \
             --project-ref "$PROJECT_ID"
 
+      - name: Deploy Valerie Reveal Notifier
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy valerie-reveal-notifier \
+            --project-ref "$PROJECT_ID"
+
   deploy-cloudflare-worker:
     name: Deploy Valerie Herald Cron Worker
     runs-on: ubuntu-latest

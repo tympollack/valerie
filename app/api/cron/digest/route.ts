@@ -12,7 +12,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 import { generateEmailActionToken } from "@/lib/auth/emailTokens";
 import { parseDigestPayload } from "@/lib/valerie/digestEngine";
-import { renderCivicDocketHtml, type DocketItem } from "@/components/email/TheCivicDocket";
+import { renderWeeklyLedgerEmail, type DocketItem } from "@/emails/WeeklyLedgerEmail";
 import {
   getNotificationDynamicSettings,
   sendBatchWithRetry,
@@ -231,7 +231,7 @@ export async function processDigestDispatch(
         const unsubscribeUrl = `${appBaseUrl}/api/digest/unsubscribe?token=${pref.unsubscribe_token}`;
         const preferencesUrl = `${appBaseUrl}/settings`;
 
-        const html = renderCivicDocketHtml({
+        const html = await renderWeeklyLedgerEmail({
           items: docketItems,
           unsubscribeUrl,
           preferencesUrl,

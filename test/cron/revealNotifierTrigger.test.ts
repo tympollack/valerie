@@ -86,6 +86,18 @@ describe("Reveal Alert Notifier Trigger (TASK-VAL-REVEAL-NOTIF-TRIGGER)", () => 
       expect(result.controversyScore).toBeGreaterThan(60);
       expect(result.trajectory).toContain("Polarized Bivariate Distribution");
     });
+
+    it("does not report 100% oppose for all-neutral ballots (Deliberative Equilibrium)", () => {
+      const responses = [
+        { likert_score: 0, confidence_score: 50 },
+        { likert_score: 0, confidence_score: 60 },
+        { likert_score: 0, confidence_score: 40 },
+      ];
+      const result = computeCommunityTrajectory(responses);
+      expect(result.totalVotes).toBe(3);
+      expect(result.trajectory).toContain("Deliberative Equilibrium");
+      expect(result.trajectory).not.toContain("Principled Rejection");
+    });
   });
 
   describe("filterAlertsUnderCeiling & Rate Limiting", () => {
@@ -145,15 +157,17 @@ describe("Reveal Alert Notifier Trigger (TASK-VAL-REVEAL-NOTIF-TRIGGER)", () => 
               };
             }
             if (tableName === "poll_responses") {
+              const chain: any = {
+                lte: vi.fn().mockImplementation(() => chain),
+                eq: vi.fn().mockImplementation(() => chain),
+                limit: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
+                in: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
+                gte: vi.fn().mockResolvedValue({ data: [], error: null }),
+                range: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
+                then(resolve: any) { return Promise.resolve({ data: mockResponses, error: null }).then(resolve); },
+              };
               return {
-                select: vi.fn().mockReturnValue({
-                  lte: vi.fn().mockReturnValue({
-                    eq: vi.fn().mockReturnValue({
-                      limit: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
-                    }),
-                  }),
-                  in: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
-                }),
+                select: vi.fn().mockReturnValue(chain),
                 update: vi.fn().mockImplementation((patch: any) => ({
                   eq: vi.fn().mockImplementation((f1: string, v1: string) => ({
                     eq: vi.fn().mockImplementation((f2: string, v2: string) => {
@@ -239,6 +253,71 @@ describe("Reveal Alert Notifier Trigger (TASK-VAL-REVEAL-NOTIF-TRIGGER)", () => 
       expect(updatedRecords[0].poll_id).toBe("poll-202");
       expect(updatedRecords[0].user_id).toBe("u-101");
       expect(updatedRecords[0].reveal_notified).toBe(true);
+    });
+
+    it("does NOT mark reveal_notified when RESEND_API_KEY is missing without mock flag", async () => {
+      const mockResponses = [
+        {
+          user_id: "u-202",
+          poll_id: "poll-303",
+          locked_until: "2026-10-31T12:00:00Z",
+          likert_score: 1,
+          confidence_score: 50,
+          reveal_notified: false,
+        },
+      ];
+      const mockPrefs = [
+        {
+          user_id: "u-202",
+          proximity_alerts_enabled: true,
+          email_cadence: "daily",
+          unsubscribe_token: "tok-2",
+        },
+      ];
+      const updatedRecords: any[] = [];
+      const mockClient = {
+        schema: vi.fn().mockReturnValue({
+          from: vi.fn().mockImplementation((table: string) => {
+            const chain: any = {
+              lte: vi.fn().mockImplementation(() => chain),
+              eq: vi.fn().mockImplementation(() => chain),
+              neq: vi.fn().mockResolvedValue({ data: mockPrefs, error: null }),
+              limit: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
+              in: vi.fn().mockImplementation(() => chain),
+              gte: vi.fn().mockResolvedValue({ data: [], error: null }),
+              range: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
+              then(resolve: any) { return Promise.resolve({ data: mockResponses, error: null }).then(resolve); },
+            };
+            return {
+              select: vi.fn().mockReturnValue(chain),
+              update: vi.fn().mockImplementation((patch: any) => ({
+                eq: vi.fn().mockReturnValue({
+                  eq: vi.fn().mockImplementation(() => {
+                    updatedRecords.push(patch);
+                    return Promise.resolve({ data: null, error: null });
+                  }),
+                }),
+              })),
+            };
+          }),
+        }),
+        auth: {
+          admin: {
+            getUserById: vi.fn().mockResolvedValue({
+              data: { user: { email: "test@votary.app" } },
+              error: null,
+            }),
+          },
+        },
+      } as any;
+
+      const result = await processRevealNotifier(mockClient, "", {
+        tokenSecret: "secret",
+      });
+
+      expect(result.status).toBe("skipped_missing_api_key");
+      expect(result.totalDispatched).toBe(0);
+      expect(updatedRecords.length).toBe(0); // Not marked as notified!
     });
   });
 });
