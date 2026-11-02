@@ -98,6 +98,7 @@ if (!skipEdge) {
     { name: "simplify-word", flags: [] },
     { name: "assemble-digest", flags: [] },
     { name: "valerie-decree-cron", flags: [] },
+    { name: "valerie-reveal-notifier", flags: [] },
   ];
 
   for (const fn of edgeFunctions) {
