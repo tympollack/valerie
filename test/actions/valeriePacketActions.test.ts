@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getClusterPacketAction, isPollEligibleForVoterLocale } from "@/app/actions/valeriePacketActions";
+import { getClusterPacketAction } from "@/app/actions/valeriePacketActions";
+import { isPollEligibleForVoterLocale } from "@/lib/geo/voterEligibility";
 
 let mockRpcResult: any = { data: null, error: null };
 let mockPollsQueryResult: any = { data: [], error: null };
