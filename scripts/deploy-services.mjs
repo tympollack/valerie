@@ -97,8 +97,8 @@ if (!skipEdge) {
     { name: "valerie-cluster-engine", flags: ["--no-verify-jwt"] },
     { name: "simplify-word", flags: [] },
     { name: "assemble-digest", flags: [] },
-    { name: "valerie-decree-cron", flags: [] },
-    { name: "valerie-reveal-notifier", flags: [] },
+    { name: "valerie-decree-cron", flags: ["--no-verify-jwt"] },
+    { name: "valerie-reveal-notifier", flags: ["--no-verify-jwt"] },
   ];
 
   for (const fn of edgeFunctions) {
@@ -126,9 +126,17 @@ if (!skipEdge) {
 if (!skipWorker) {
   console.log("\n⚡ [2/2] Deploying Cloudflare Cron Worker (valerie-herald-cron)...");
   const heraldEndpoint = `https://${projectRef}.supabase.co/functions/v1/valerie-herald-agent`;
+  const decreeEndpoint = `https://${projectRef}.supabase.co/functions/v1/valerie-decree-cron`;
   const ok = runCommand(
     "npx",
-    ["wrangler", "deploy", "--var", `HERALD_AGENT_ENDPOINT:${heraldEndpoint}`],
+    [
+      "wrangler",
+      "deploy",
+      "--var",
+      `HERALD_AGENT_ENDPOINT:${heraldEndpoint}`,
+      "--var",
+      `DECREE_CRON_ENDPOINT:${decreeEndpoint}`,
+    ],
     WORKER_DIR
   );
   if (!ok) {

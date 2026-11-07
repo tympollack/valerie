@@ -264,4 +264,62 @@ describe("Valerie Herald Cron Worker", () => {
       expect(result.error).toContain("500: Internal server error");
     });
   });
+
+  describe("Scheduled Trigger Dual Cadence Routing", () => {
+    it("dispatches only decree cron on odd hours (01:00 UTC)", async () => {
+      const waitTasks: Promise<any>[] = [];
+      const mockCtx: any = {
+        waitUntil: (p: Promise<any>) => waitTasks.push(p),
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "success", compiledDecrees: 0 }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const event: any = {
+        cron: "0 * * * *",
+        scheduledTime: new Date("2026-11-07T01:00:00Z").getTime(),
+      };
+
+      await worker.scheduled(event, { CRON_SECRET: "test-sec" }, mockCtx);
+      await Promise.all(waitTasks);
+
+      // Only decree cron endpoint was invoked, not herald agent
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("valerie-decree-cron"),
+        expect.anything()
+      );
+    });
+
+    it("dispatches both decree and herald cycles on even hours (02:00 UTC)", async () => {
+      const waitTasks: Promise<any>[] = [];
+      const mockCtx: any = {
+        waitUntil: (p: Promise<any>) => waitTasks.push(p),
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "success", compiledDecrees: 0 }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const event: any = {
+        cron: "0 * * * *",
+        scheduledTime: new Date("2026-11-07T02:00:00Z").getTime(),
+      };
+
+      await worker.scheduled(event, { CRON_SECRET: "test-sec" }, mockCtx);
+      await Promise.all(waitTasks);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("valerie-decree-cron"),
+        expect.anything()
+      );
+    });
+  });
 });

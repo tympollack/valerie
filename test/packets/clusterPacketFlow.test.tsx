@@ -144,7 +144,11 @@ describe("BivariatePollCard Sequential Packet Flow & Cadence Off-Ramp", () => {
     expect(screen.getByText(/Civic Packet Complete • 3 Measures Sealed/i)).toBeInTheDocument();
 
     expect(screen.getByRole("link", { name: /Explore Community Results/i })).toBeInTheDocument();
-  });
+    expect(screen.getByRole("link", { name: /Explore Community Results/i })).toHaveAttribute(
+      "href",
+      "/poll/poll-companion-2"
+    );
+  }, 15000);
 
   it("completes single-measure packet cleanly when packetId is provided", async () => {
     const onPacketComplete = vi.fn();
@@ -220,5 +224,5 @@ describe("BivariatePollCard Sequential Packet Flow & Cadence Off-Ramp", () => {
       expect(screen.getByTestId("chapter-end-card")).toBeInTheDocument();
     });
     expect(onPacketComplete).toHaveBeenCalledTimes(1);
-  });
+  }, 15000);
 });

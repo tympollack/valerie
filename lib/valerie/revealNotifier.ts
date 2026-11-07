@@ -223,13 +223,18 @@ export async function processRevealNotifier(
   const effectiveSecret = tokenSecret || "valerie-action-test-secret-dev-only";
 
   const nowIso = new Date().toISOString();
-  const { data: responses, error: respError } = await (adminClient as any)
+  let responsesQuery = (adminClient as any)
     .schema("valerie")
     .from("poll_responses")
     .select("user_id, poll_id, locked_until, likert_score, confidence_score, reveal_notified")
     .lte("locked_until", nowIso)
-    .eq("reveal_notified", false)
-    .limit(500);
+    .eq("reveal_notified", false);
+
+  if (typeof responsesQuery?.order === "function") {
+    responsesQuery = responsesQuery.order("locked_until", { ascending: true });
+  }
+
+  const { data: responses, error: respError } = await responsesQuery.limit(500);
 
   if (respError) {
     return { status: "error" as const, totalEligible: 0, totalDispatched: 0, error: respError.message };
@@ -239,7 +244,7 @@ export async function processRevealNotifier(
   }
 
   const userIds = Array.from(new Set(responses.map((r: any) => r.user_id)));
-  const { data: prefs } = await (adminClient as any)
+  const { data: prefs, error: prefsError } = await (adminClient as any)
     .schema("valerie")
     .from("user_digest_preferences")
     .select("user_id, proximity_alerts_enabled, email_cadence, unsubscribe_token")
@@ -247,9 +252,41 @@ export async function processRevealNotifier(
     .eq("proximity_alerts_enabled", true)
     .neq("email_cadence", "off");
 
+  if (prefsError) {
+    console.error("[valerie-reveal-notifier] Preferences query error, halting to prevent discarding alerts:", prefsError);
+    return {
+      status: "error" as const,
+      totalEligible: 0,
+      totalDispatched: 0,
+      error: `Preferences query failed: ${prefsError.message}`,
+    };
+  }
+
   const allowedUserMap = new Map<string, string>();
   if (Array.isArray(prefs)) {
     for (const p of prefs) allowedUserMap.set(p.user_id, p.unsubscribe_token);
+  }
+
+  // Permanently ineligible responses: user has proximity alerts disabled or email cadence off
+  // Mark these notified with reveal_notified_at = null so they do not cause head-of-line blocking
+  // and do not consume the user's daily email allowance (BUG_0001, BUG_0002)
+  const permanentlyIneligible = responses.filter((r: any) => !allowedUserMap.has(r.user_id));
+  if (permanentlyIneligible.length > 0) {
+    for (const r of permanentlyIneligible) {
+      try {
+        const { error: ineligErr } = await (adminClient as any)
+          .schema("valerie")
+          .from("poll_responses")
+          .update({ reveal_notified: true, reveal_notified_at: null })
+          .eq("poll_id", r.poll_id)
+          .eq("user_id", r.user_id);
+        if (ineligErr) {
+          console.error("[valerie-reveal-notifier] Failed to mark ineligible response:", ineligErr);
+        }
+      } catch (err) {
+        console.error("[valerie-reveal-notifier] Ineligible update error:", err);
+      }
+    }
   }
 
   const candidates: PendingRevealCandidate[] = responses
@@ -324,7 +361,16 @@ export async function processRevealNotifier(
   for (const item of throttledCandidates) {
     try {
       const { data: userData } = await adminClient.auth.admin.getUserById(item.userId);
-      if (!userData?.user?.email) continue;
+      if (!userData?.user?.email) {
+        // Mark notified with reveal_notified_at = null so it does not count against daily allowance
+        await (adminClient as any)
+          .schema("valerie")
+          .from("poll_responses")
+          .update({ reveal_notified: true, reveal_notified_at: null })
+          .eq("poll_id", item.pollId)
+          .eq("user_id", item.userId);
+        continue;
+      }
 
       const token = await generateRevealToken(item.userId, item.pollId, effectiveSecret);
       const revealUrl = `${appBaseUrl}/poll/${item.pollId}?action_token=${token}`;
@@ -377,12 +423,15 @@ export async function processRevealNotifier(
     const sentAtIso = new Date().toISOString();
     for (const pair of candidateDispatchedPairs) {
       try {
-        await (adminClient as any)
+        const { error: updateErr } = await (adminClient as any)
           .schema("valerie")
           .from("poll_responses")
           .update({ reveal_notified: true, reveal_notified_at: sentAtIso })
           .eq("poll_id", pair.pollId)
           .eq("user_id", pair.userId);
+        if (updateErr) {
+          console.error("[valerie-reveal-notifier] Failed to mark reveal_notified:", updateErr);
+        }
       } catch (err) { console.error("[valerie-reveal-notifier] Failed to mark reveal_notified:", err); }
     }
   }
