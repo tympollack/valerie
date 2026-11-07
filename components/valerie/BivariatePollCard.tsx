@@ -4,10 +4,7 @@ import { useState, useCallback, useTransition, useMemo, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Lock,
-  Send,
   Sparkles,
-  Info,
-  CheckCircle2,
   AlertCircle,
   HelpCircle,
   MessageSquare,
@@ -24,7 +21,7 @@ import { ValerieTooltip } from "@/components/valerie/ValerieTooltip"
 import { RevealGate, type BivariateVote } from "@/components/valerie/RevealGate"
 import type { LocaleGranularity, LocaleSentimentRecord } from "@/app/actions/valerieLocaleActions"
 import { PremiseChallengeDrawer } from "@/components/valerie/PremiseChallengeDrawer"
-import { castVote, submitVote } from "@/app/actions/vote"
+import { castVote } from "@/app/actions/vote"
 import { flagPollWithCommitGate, type FlagReason } from "@/app/actions/valerieFlagActions"
 import {
   getStanceArchetype,
@@ -35,16 +32,41 @@ import {
   getConfidenceDescription,
 } from "@/lib/valerie/stanceNomenclature"
 import { parseQuestionWithTooltips } from "@/components/valerie/questionParser"
+import { ChapterEndCard } from "@/components/valerie/ChapterEndCard"
+import { PacketProgressBanner } from "@/components/valerie/PacketProgressBanner"
+import { LikertScaleInput } from "@/components/valerie/LikertScaleInput"
+import { BivariateCoordinatePreview } from "@/components/valerie/BivariateCoordinatePreview"
 import { cn } from "@/lib/utils"
 
 // =============================================================================
 // Constants & Definitions
 // =============================================================================
 
+export interface CompanionPollItem {
+  id: string
+  questionText?: string
+  question_text?: string
+  category?: string
+  axis_category?: string
+  [key: string]: any
+}
+
+export interface InitialVoteData {
+  likertScore: number
+  confidenceScore: number
+  lockedUntil?: string | null
+  comment?: string | null
+}
+
 export interface BivariatePollCardProps {
   pollId?: string
   questionText?: string
   category?: string
+  companionPolls?: CompanionPollItem[]
+  packetId?: string
+  isSurge?: boolean
+  initialVote?: InitialVoteData | null
+  onPacketComplete?: () => void
   onVoteSuccess?: (vote: BivariateVote) => void
   onFlagSuccess?: (challenge: { flagReason: string; suggestedAxisComment?: string }) => void
   className?: string
@@ -65,6 +87,11 @@ export function BivariatePollCard({
   pollId = "",
   questionText = "",
   category = "Civic Deliberation",
+  companionPolls,
+  packetId,
+  isSurge = false,
+  initialVote,
+  onPacketComplete,
   onVoteSuccess,
   onFlagSuccess,
   className,
@@ -76,15 +103,45 @@ export function BivariatePollCard({
   historicalZScore,
   historicalBaseline,
 }: BivariatePollCardProps) {
+  // --- Packet Sequence State
+  const [activePacketIndex, setActivePacketIndex] = useState<number>(0)
+  const [isPacketComplete, setIsPacketComplete] = useState<boolean>(false)
+
+  const packetSequence = useMemo(() => {
+    const list: CompanionPollItem[] = [
+      {
+        id: pollId,
+        questionText,
+        question_text: questionText,
+        category,
+        axis_category: category,
+      },
+    ]
+    if (Array.isArray(companionPolls) && companionPolls.length > 0) {
+      list.push(...companionPolls)
+    }
+    return list
+  }, [pollId, questionText, category, companionPolls])
+
+  const totalPacketPolls = packetSequence.length
+  const hasCompanions = totalPacketPolls > 1
+  const activePoll = packetSequence[activePacketIndex] || packetSequence[0]
+  const currentPollId = activePoll?.id || pollId
+  const currentQuestionText = activePoll?.questionText || activePoll?.question_text || questionText
+  const currentCategory = activePoll?.category || activePoll?.axis_category || category
+
+  const hasNextCompanion = hasCompanions && activePacketIndex < totalPacketPolls - 1
+  const nextCompanion = hasNextCompanion ? packetSequence[activePacketIndex + 1] : null
+
   // --- Form state
-  const [likertScore, setLikertScore] = useState<number>(0)
-  const [confidenceScore, setConfidenceScore] = useState<number>(75)
-  const [comment, setComment] = useState<string>("")
-  const [hasInteractedLikert, setHasInteractedLikert] = useState<boolean>(false)
+  const [likertScore, setLikertScore] = useState<number>(initialVote?.likertScore ?? 0)
+  const [confidenceScore, setConfidenceScore] = useState<number>(initialVote?.confidenceScore ?? 75)
+  const [comment, setComment] = useState<string>(initialVote?.comment ?? "")
+  const [hasInteractedLikert, setHasInteractedLikert] = useState<boolean>(Boolean(initialVote))
 
   // --- Submission & Commit-and-Reveal state
-  const [isSubmitted, setIsSubmitted] = useState<boolean>(false)
-  const [lockedUntil, setLockedUntil] = useState<string | undefined>(undefined)
+  const [isSubmitted, setIsSubmitted] = useState<boolean>(Boolean(initialVote))
+  const [lockedUntil, setLockedUntil] = useState<string | undefined>(initialVote?.lockedUntil ?? undefined)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false)
@@ -94,6 +151,23 @@ export function BivariatePollCard({
   } | null>(null)
   const [isFlagPending, startFlagTransition] = useTransition()
   const [returnUrl, setReturnUrl] = useState("")
+
+  const handleAdvanceNextCompanion = useCallback(() => {
+    if (activePacketIndex + 1 >= totalPacketPolls) {
+      setIsPacketComplete(true)
+      onPacketComplete?.()
+      return
+    }
+
+    setActivePacketIndex((prev) => prev + 1)
+    setIsSubmitted(false)
+    setLikertScore(0)
+    setConfidenceScore(75)
+    setComment("")
+    setHasInteractedLikert(false)
+    setUserChallenge(null)
+    setErrorMsg(null)
+  }, [activePacketIndex, totalPacketPolls, onPacketComplete])
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -145,7 +219,7 @@ export function BivariatePollCard({
     startTransition(async () => {
       try {
         const result = await castVote({
-          pollId,
+          pollId: currentPollId,
           likertScore,
           confidenceScore,
           comment: comment.trim() || undefined,
@@ -158,6 +232,10 @@ export function BivariatePollCard({
           setLockedUntil(unlockTime)
           setIsSubmitted(true)
           onVoteSuccess?.({ likertScore, confidenceScore, comment })
+          if ((hasCompanions || packetId) && activePacketIndex === totalPacketPolls - 1) {
+            setIsPacketComplete(true)
+            onPacketComplete?.()
+          }
         } else {
           setErrorMsg(result.error || "Failed to commit vote.")
         }
@@ -176,7 +254,18 @@ export function BivariatePollCard({
         setErrorMsg(errorText)
       }
     })
-  }, [pollId, likertScore, confidenceScore, comment, onVoteSuccess])
+  }, [
+    currentPollId,
+    likertScore,
+    confidenceScore,
+    comment,
+    onVoteSuccess,
+    hasCompanions,
+    packetId,
+    activePacketIndex,
+    totalPacketPolls,
+    onPacketComplete,
+  ])
 
   // Premise Challenge Handler
   const handleChallengeSubmit = useCallback(
@@ -186,7 +275,7 @@ export function BivariatePollCard({
       startFlagTransition(async () => {
         try {
           const result = await flagPollWithCommitGate({
-            pollId,
+            pollId: currentPollId,
             flagReason: reason,
             suggestedAxisComment: missingAxisText,
           })
@@ -206,6 +295,10 @@ export function BivariatePollCard({
               flagReason: reason,
               suggestedAxisComment: missingAxisText,
             })
+            if ((hasCompanions || packetId) && activePacketIndex === totalPacketPolls - 1) {
+              setIsPacketComplete(true)
+              onPacketComplete?.()
+            }
           } else {
             setErrorMsg(result.error || "Failed to record premise challenge.")
           }
@@ -225,470 +318,381 @@ export function BivariatePollCard({
         }
       })
     },
-    [pollId, onFlagSuccess]
+    [
+      currentPollId,
+      onFlagSuccess,
+      hasCompanions,
+      packetId,
+      activePacketIndex,
+      totalPacketPolls,
+      onPacketComplete,
+    ]
   )
+
+  if (isPacketComplete) {
+    return (
+      <div className={cn("mx-auto w-full max-w-2xl", className)}>
+        <ChapterEndCard
+          message="You have weighed in on all active measures in this district today. Your voice is sealed."
+          totalCompleted={totalPacketPolls}
+          pollId={currentPollId || pollId}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className={cn("mx-auto w-full max-w-2xl space-y-6", className)}>
-      {/* ── Question & Civic Context Card ───────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="space-y-4 rounded-2xl border border-cyan-500/30 bg-slate-950/80 p-6 shadow-[0_0_30px_rgba(6,182,212,0.1)] backdrop-blur-xl"
-      >
-        <div className="flex items-center justify-between">
-          <Badge
-            variant="outline"
-            className="border-cyan-500/40 bg-cyan-950/50 px-2.5 py-0.5 text-[11px] font-semibold tracking-wider text-cyan-300 uppercase"
-          >
-            {category}
-          </Badge>
-          <div className="flex items-center gap-1.5 text-xs text-slate-400">
-            <Lock className="h-3.5 w-3.5 text-cyan-400" />
-            <span>24h Blind Lock</span>
-          </div>
-        </div>
-
-        {/* Interactive Parsed Question Header */}
-        <h2 className="text-xl leading-snug font-bold text-slate-100 sm:text-2xl">
-          {parseQuestionWithTooltips(questionText)}
-        </h2>
-
-        <p className="flex items-center gap-1.5 border-t border-slate-800/80 pt-3 text-xs text-slate-400">
-          <Sparkles className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
-          <span>
-            Hover or tap highlighted terms with dotted underlines to inspect
-            instant AI-simplified definitions.
-          </span>
-        </p>
-      </motion.div>
-
-      {/* ── Bivariate Controls or Reveal Gate ───────────────────────────── */}
-      {!isSubmitted ? (
+      <AnimatePresence mode="wait">
         <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 0.1 }}
+          key={`poll-card-${currentPollId}-${activePacketIndex}`}
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          transition={{ type: "spring", stiffness: 300, damping: 28 }}
           className="space-y-6"
         >
-          {/* 1. Blind Voting Banner */}
-          <RevealGate isSubmitted={false} />
-
-          {/* Dynamic Civic Stance Archetype Pill */}
-          <div className="flex h-14 items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/80 px-5 py-3 backdrop-blur-xl">
-            <div className="flex items-center gap-2">
-              <Compass className="h-4 w-4 text-cyan-400" />
-              <span className="text-xs font-semibold text-slate-300">
-                Civic Stance Archetype
-              </span>
+          {/* ── Question & Civic Context Card ───────────────────────────────── */}
+          <div className="space-y-4 rounded-2xl border border-cyan-500/30 bg-slate-950/80 p-6 shadow-[0_0_30px_rgba(6,182,212,0.1)] backdrop-blur-xl">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className="border-cyan-500/40 bg-cyan-950/50 px-2.5 py-0.5 text-[11px] font-semibold tracking-wider text-cyan-300 uppercase"
+                >
+                  {currentCategory}
+                </Badge>
+                {hasCompanions && (
+                  <Badge
+                    data-testid="packet-step-badge"
+                    variant="outline"
+                    className="border-amber-500/40 bg-amber-950/50 px-2.5 py-0.5 text-[11px] font-semibold tracking-wider text-amber-300"
+                  >
+                    Step {activePacketIndex + 1} of {totalPacketPolls}
+                  </Badge>
+                )}
+                {isSurge && (
+                  <Badge
+                    data-testid="packet-surge-badge"
+                    variant="outline"
+                    className="border-red-500/40 bg-red-950/50 px-2.5 py-0.5 text-[11px] font-semibold tracking-wider text-red-300 uppercase animate-pulse"
+                  >
+                    District Emergency Surge
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Lock className="h-3.5 w-3.5 text-cyan-400" />
+                <span>24h Blind Lock</span>
+              </div>
             </div>
 
-            <motion.div
-              layout
-              transition={STANCE_BADGE_SPRING}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-xs font-bold transition-all duration-200",
-                stanceMeta.badgeClassName
-              )}
-            >
-              <motion.span
-                key={stanceArchetype}
-                initial={{ opacity: 0, y: -2 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 2 }}
-                transition={{ duration: 0.15 }}
-                data-testid="stance-archetype-pill"
-              >
-                {stanceArchetype}
-              </motion.span>
-            </motion.div>
+            {/* Interactive Parsed Question Header */}
+            <h2 className="text-xl leading-snug font-bold text-slate-100 sm:text-2xl">
+              {parseQuestionWithTooltips(currentQuestionText)}
+            </h2>
+
+            <p className="flex items-center gap-1.5 border-t border-slate-800/80 pt-3 text-xs text-slate-400">
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-cyan-400" />
+              <span>
+                Hover or tap highlighted terms with dotted underlines to inspect
+                instant AI-simplified definitions.
+              </span>
+            </p>
           </div>
 
-          {/* 2. Likert Scale Slider (-2 to +2) */}
-          <div className="space-y-5 rounded-2xl border border-cyan-500/25 bg-slate-950/80 p-6 shadow-[0_0_25px_rgba(6,182,212,0.08)] backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                  <span>1. Sentiment Direction (Likert Axis)</span>
-                  <ValerieTooltip word="likert scale">
-                    <HelpCircle className="h-3.5 w-3.5 text-cyan-400" />
-                  </ValerieTooltip>
-                </h3>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  Where do you stand on this civic proposition?
-                </p>
-              </div>
-
-              {/* Live Selected Badge */}
-              <div
-                className={cn(
-                  "rounded-lg border px-3 py-1 font-mono text-xs font-bold transition-all duration-200",
-                  activeLikert.activeColor
-                )}
-              >
-                {activeLikert.value > 0
-                  ? `+${activeLikert.value}`
-                  : activeLikert.value}{" "}
-                : {activeLikert.short}
-              </div>
-            </div>
-
-            {/* Stepped Interactive Buttons / Slider */}
-            <div
-              className="grid grid-cols-5 gap-2 pt-1"
-              role="radiogroup"
-              aria-label="Likert Scale"
+          {/* ── Bivariate Controls or Reveal Gate ───────────────────────────── */}
+          {!isSubmitted ? (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.1 }}
+              className="space-y-6"
             >
-              {LIKERT_STEPS.map((step) => {
-                const isSelected = likertScore === step.value
-                return (
-                  <button
-                    key={step.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={isSelected}
-                    aria-label={step.label}
-                    onClick={() => {
-                      setLikertScore(step.value)
-                      setHasInteractedLikert(true)
-                      setErrorMsg(null)
-                    }}
-                    className={cn(
-                      "group relative flex cursor-pointer flex-col items-center justify-center rounded-xl border p-3.5 transition-all duration-200",
-                      "focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none",
-                      isSelected
-                        ? step.activeColor
-                        : "border-slate-800 bg-slate-900/60 text-slate-300 hover:border-slate-700 hover:bg-slate-900"
-                    )}
+              {/* 1. Blind Voting Banner */}
+              <RevealGate isSubmitted={false} />
+
+              {/* Dynamic Civic Stance Archetype Pill */}
+              <div className="flex h-14 items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/80 px-5 py-3 backdrop-blur-xl">
+                <div className="flex items-center gap-2">
+                  <Compass className="h-4 w-4 text-cyan-400" />
+                  <span className="text-xs font-semibold text-slate-300">
+                    Civic Stance Archetype
+                  </span>
+                </div>
+
+                <motion.div
+                  layout
+                  transition={STANCE_BADGE_SPRING}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-xs font-bold transition-all duration-200",
+                    stanceMeta.badgeClassName
+                  )}
+                >
+                  <motion.span
+                    key={stanceArchetype}
+                    initial={{ opacity: 0, y: -2 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 2 }}
+                    transition={{ duration: 0.15 }}
+                    data-testid="stance-archetype-pill"
                   >
-                    <span className="font-mono text-lg font-bold">
-                      {step.value > 0 ? `+${step.value}` : step.value}
-                    </span>
-                    <span className="mt-1 text-center text-[10px] leading-tight font-medium">
-                      {step.label.includes(" ") ? (
-                        <>
-                          {step.label.split(" ")[0]}
-                          <br />
-                          {step.label.split(" ").slice(1).join(" ")}
-                        </>
-                      ) : (
-                        step.label
-                      )}
-                    </span>
+                    {stanceArchetype}
+                  </motion.span>
+                </motion.div>
+              </div>
 
-                    {/* Glowing highlight indicator */}
-                    {isSelected && (
-                      <motion.div
-                        layoutId="likert-indicator"
-                        className="pointer-events-none absolute inset-0 rounded-xl border-2 border-cyan-300"
-                        transition={{
-                          type: "spring",
-                          stiffness: 400,
-                          damping: 30,
-                        }}
-                      />
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-
-            {/* Range Track Visualizer */}
-            <div className="relative pt-2">
-              <input
-                type="range"
-                min={-2}
-                max={2}
-                step={1}
-                value={likertScore}
-                onChange={(e) => {
-                  setLikertScore(parseInt(e.target.value, 10))
+              {/* 2. Likert Scale Slider (-2 to +2) */}
+              <LikertScaleInput
+                likertScore={likertScore}
+                activeLikert={activeLikert}
+                onSelectLikert={(score) => {
+                  setLikertScore(score)
                   setHasInteractedLikert(true)
                   setErrorMsg(null)
                 }}
-                className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-slate-800 accent-cyan-400 focus:outline-none"
-                aria-label="Likert slider"
               />
-              <div className="mt-1 flex justify-between text-[11px] text-slate-400">
-                <span>Strongly Disagree (-2)</span>
-                <span className="font-semibold text-slate-300">
-                  {activeLikert.label}
-                </span>
-                <span>Strongly Agree (+2)</span>
+
+              {/* 3. Confidence Gauge Slider (0% to 100%) */}
+              <div className="space-y-5 rounded-2xl border border-cyan-500/25 bg-slate-950/80 p-6 shadow-[0_0_25px_rgba(6,182,212,0.08)] backdrop-blur-xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                      <span>2. Certainty &amp; Importance (Confidence Axis)</span>
+                      <ValerieTooltip word="bivariate scoring">
+                        <HelpCircle className="h-3.5 w-3.5 text-cyan-400" />
+                      </ValerieTooltip>
+                    </h3>
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      How certain are you, or how heavily does this issue weigh?
+                    </p>
+                  </div>
+
+                  {/* Numeric Percentage Readout Badge */}
+                  <div className="flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/70 px-3 py-1 font-mono text-sm font-bold text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.2)]">
+                    <span>{confidenceScore}%</span>
+                    <span className="font-sans text-[10px] text-cyan-400/70">
+                      Certainty
+                    </span>
+                  </div>
+                </div>
+
+                {/* Gauge Description Pill */}
+                <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/80 px-3.5 py-2 text-xs">
+                  <span className={cn("font-semibold", confidenceTier.color)}>
+                    {confidenceTier.label}
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    {confidenceTier.tone}
+                  </span>
+                </div>
+
+                {/* Custom Glowing Slider Track */}
+                <div className="space-y-2">
+                  <div className="relative flex items-center">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={confidenceScore}
+                      onChange={(e) =>
+                        setConfidenceScore(parseInt(e.target.value, 10))
+                      }
+                      className="h-2.5 w-full cursor-pointer appearance-none rounded-lg bg-slate-800 accent-cyan-400 focus:outline-none"
+                      aria-label="Confidence gauge slider"
+                    />
+                  </div>
+
+                  <div className="flex justify-between font-mono text-[11px] text-slate-400">
+                    <span>0% (Guess / Intuition)</span>
+                    <span>50%</span>
+                    <span>100% (Absolute Conviction)</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* 3. Confidence Gauge Slider (0% to 100%) */}
-          <div className="space-y-5 rounded-2xl border border-cyan-500/25 bg-slate-950/80 p-6 shadow-[0_0_25px_rgba(6,182,212,0.08)] backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                  <span>2. Certainty &amp; Importance (Confidence Axis)</span>
-                  <ValerieTooltip word="bivariate scoring">
-                    <HelpCircle className="h-3.5 w-3.5 text-cyan-400" />
-                  </ValerieTooltip>
-                </h3>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  How certain are you, or how heavily does this issue weigh?
-                </p>
-              </div>
+              {/* 4. Live Bivariate 2D Coordinate Preview */}
+              <BivariateCoordinatePreview
+                likertScore={likertScore}
+                confidenceScore={confidenceScore}
+              />
 
-              {/* Numeric Percentage Readout Badge */}
-              <div className="flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/70 px-3 py-1 font-mono text-sm font-bold text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.2)]">
-                <span>{confidenceScore}%</span>
-                <span className="font-sans text-[10px] text-cyan-400/70">
-                  Certainty
-                </span>
-              </div>
-            </div>
+              {/* 5. Optional Nuanced Comment Box */}
+              <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/80 p-5">
+                <div className="flex items-center justify-between">
+                  <label
+                    htmlFor="vote-comment"
+                    className="flex items-center gap-1.5 text-xs font-semibold text-slate-200"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 text-cyan-400" />
+                    <span>Add Nuanced Rationale (Optional)</span>
+                  </label>
+                  <span className="font-mono text-[11px] text-slate-400">
+                    {comment.length}/500
+                  </span>
+                </div>
 
-            {/* Gauge Description Pill */}
-            <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/80 px-3.5 py-2 text-xs">
-              <span className={cn("font-semibold", confidenceTier.color)}>
-                {confidenceTier.label}
-              </span>
-              <span className="text-[11px] text-slate-400">
-                {confidenceTier.tone}
-              </span>
-            </div>
-
-            {/* Custom Glowing Slider Track */}
-            <div className="space-y-2">
-              <div className="relative flex items-center">
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={confidenceScore}
-                  onChange={(e) =>
-                    setConfidenceScore(parseInt(e.target.value, 10))
-                  }
-                  className="h-2.5 w-full cursor-pointer appearance-none rounded-lg bg-slate-800 accent-cyan-400 focus:outline-none"
-                  aria-label="Confidence gauge slider"
+                <Textarea
+                  id="vote-comment"
+                  placeholder="Explain your reasoning or specific conditions for your vote..."
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  maxLength={500}
+                  rows={3}
+                  className="resize-none border-slate-800 bg-slate-900/60 text-xs text-slate-100 focus:border-cyan-500 focus:ring-cyan-500/20"
                 />
               </div>
 
-              <div className="flex justify-between font-mono text-[11px] text-slate-400">
-                <span>0% (Guess / Intuition)</span>
-                <span>50%</span>
-                <span>100% (Absolute Conviction)</span>
-              </div>
-            </div>
-          </div>
+              {/* Error Alert */}
+              {errorMsg && (
+                <Alert
+                  variant="destructive"
+                  className="border-rose-500/40 bg-rose-950/50 text-rose-200"
+                >
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <AlertDescription className="text-xs leading-relaxed">
+                      {errorMsg}
+                    </AlertDescription>
+                    {errorMsg.toLowerCase().includes("verification") && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <a
+                          href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-amber-400"
+                        >
+                          <span>Verify on SunShade Hub</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                        <Link
+                          href="/settings"
+                          className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-900/30 px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-900/50"
+                        >
+                          Account Status &amp; Settings
+                        </Link>
+                      </div>
+                    )}
+                    {errorMsg.toLowerCase().includes("signed in") && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <a
+                          href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}`}
+                          className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-cyan-400"
+                        >
+                          <span>Sign In with SunShade Hub</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </Alert>
+              )}
 
-          {/* 4. Live Bivariate 2D Coordinate Preview */}
-          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
-                <Compass className="h-4 w-4 text-cyan-400" />
-                <span>Bivariate Coordinate:</span>
-                <span className="rounded border border-cyan-500/30 bg-slate-950 px-2 py-0.5 font-mono text-cyan-400">
-                  [{likertScore > 0 ? `+${likertScore}` : likertScore},{" "}
-                  {confidenceScore}%]
+              {/* Premise Challenge Drawer */}
+              <PremiseChallengeDrawer
+                isOpen={isDrawerOpen}
+                onClose={() => setIsDrawerOpen(false)}
+                onSubmit={handleChallengeSubmit}
+                isSubmitting={isFlagPending}
+                error={errorMsg}
+              />
+
+              {/* 6. Primary Action Buttons: Vote Commit CTA & Premise Challenge Button */}
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <Button
+                  type="button"
+                  size="lg"
+                  onClick={handleSubmit}
+                  disabled={isPending || isFlagPending}
+                  className={cn(
+                    "h-13 w-full sm:flex-1 cursor-pointer rounded-xl text-sm font-bold tracking-wide shadow-lg transition-all duration-200",
+                    "bg-gradient-to-r from-cyan-500 via-teal-400 to-cyan-500 text-slate-950 hover:opacity-95 hover:shadow-[0_0_25px_rgba(6,182,212,0.4)]"
+                  )}
+                >
+                  {isPending ? (
+                    <span className="flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
+                      Sealing Cryptographic Vote...
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <Lock className="h-4 w-4" />
+                      Commit &amp; Seal Bivariate Vote
+                    </span>
+                  )}
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="lg"
+                  onClick={() => {
+                    setIsDrawerOpen((prev) => !prev)
+                    setErrorMsg(null)
+                  }}
+                  disabled={isPending || isFlagPending}
+                  className={cn(
+                    "h-13 w-full sm:w-auto cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 px-4 text-xs font-semibold text-slate-300 transition-all duration-200 hover:border-amber-500/40 hover:bg-slate-900 hover:text-amber-300",
+                    isDrawerOpen && "border-amber-500/50 bg-amber-950/30 text-amber-300"
+                  )}
+                >
+                  <Flag className="h-4 w-4 text-amber-400" />
+                  <span>Challenge Premise / Framing</span>
+                </Button>
+              </div>
+
+              {/* Contextual Subtitle Indicating Relative Weight */}
+              <p className="text-center text-xs font-medium text-slate-400">
+                Conviction Profile:{" "}
+                <span
+                  className={cn(
+                    "font-semibold",
+                    relativeWeightSubtitle === "Primary Personal Anchor"
+                      ? "text-cyan-300"
+                      : "text-slate-300"
+                  )}
+                  data-testid="stance-relative-weight"
+                >
+                  {relativeWeightSubtitle}
                 </span>
-              </div>
-              <span className="text-[11px] text-slate-400">
-                Captured independently for bivariate weighting
-              </span>
-            </div>
+              </p>
 
-            {/* Mini 2D Vector Compass */}
-            <div className="relative flex h-14 items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
-              {/* Crosshairs */}
-              <div className="absolute inset-x-0 h-px bg-slate-800" />
-              <div className="absolute inset-y-0 w-px bg-slate-800" />
-
-              {/* Axis Labels */}
-              <span className="absolute left-2 font-mono text-[9px] text-slate-400">
-                Disagree (-2)
-              </span>
-              <span className="absolute right-2 font-mono text-[9px] text-slate-400">
-                Agree (+2)
-              </span>
-              <span className="absolute top-1 font-mono text-[9px] text-cyan-400/80">
-                100% Certainty
-              </span>
-              <span className="absolute bottom-1 font-mono text-[9px] text-slate-400">
-                0%
-              </span>
-
-              {/* Dynamic User Pin */}
-              <motion.div
-                className="absolute z-10 h-4 w-4 rounded-full border-2 border-slate-950 bg-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.8)]"
-                style={{
-                  left: `${((likertScore + 2) / 4) * 85 + 7.5}%`,
-                  bottom: `${(confidenceScore / 100) * 70 + 15}%`,
-                }}
-                transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              <p className="text-center text-[11px] text-slate-400">
+                Immutable cryptographic commit. Zero pre-vote herd bias. Community
+                bivariate charts unlock after 24h.
+              </p>
+            </motion.div>
+          ) : (
+            // Post-Submission Commit-and-Reveal Gate with Sequential Progress Banner
+            <div className="space-y-6">
+              {hasNextCompanion && nextCompanion && (
+                <PacketProgressBanner
+                  currentStep={activePacketIndex + 1}
+                  totalSteps={totalPacketPolls}
+                  nextPollTitle={nextCompanion.questionText || nextCompanion.question_text || "Next District Measure"}
+                  onAdvance={handleAdvanceNextCompanion}
+                  isSurge={isSurge}
+                />
+              )}
+              <RevealGate
+                isSubmitted={true}
+                lockedUntil={lockedUntil}
+                userVote={userChallenge ? undefined : { likertScore, confidenceScore, comment }}
+                userChallenge={userChallenge ?? undefined}
+                isPremiseChallenge={Boolean(userChallenge)}
+                flagReason={userChallenge?.flagReason}
+                suggestedAxisComment={userChallenge?.suggestedAxisComment}
+                pollQuestion={currentQuestionText}
+                pollId={currentPollId}
+                relatedEcosystemRefs={relatedEcosystemRefs}
+                initialLocaleResults={initialLocaleResults}
+                initialGranularity={initialGranularity}
               />
             </div>
-          </div>
-
-          {/* 5. Optional Nuanced Comment Box */}
-          <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/80 p-5">
-            <div className="flex items-center justify-between">
-              <label
-                htmlFor="vote-comment"
-                className="flex items-center gap-1.5 text-xs font-semibold text-slate-200"
-              >
-                <MessageSquare className="h-3.5 w-3.5 text-cyan-400" />
-                <span>Add Nuanced Rationale (Optional)</span>
-              </label>
-              <span className="font-mono text-[11px] text-slate-400">
-                {comment.length}/500
-              </span>
-            </div>
-
-            <Textarea
-              id="vote-comment"
-              placeholder="Explain your reasoning or specific conditions for your vote..."
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              maxLength={500}
-              rows={3}
-              className="resize-none border-slate-800 bg-slate-900/60 text-xs text-slate-100 focus:border-cyan-500 focus:ring-cyan-500/20"
-            />
-          </div>
-
-          {/* Error Alert */}
-          {errorMsg && (
-            <Alert
-              variant="destructive"
-              className="border-rose-500/40 bg-rose-950/50 text-rose-200"
-            >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-              <div className="min-w-0 flex-1 space-y-2">
-                <AlertDescription className="text-xs leading-relaxed">
-                  {errorMsg}
-                </AlertDescription>
-                {errorMsg.toLowerCase().includes("verification") && (
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <a
-                      href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-amber-400"
-                    >
-                      <span>Verify on SunShade Hub</span>
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                    <Link
-                      href="/settings"
-                      className="inline-flex items-center gap-1 rounded-lg border border-rose-500/30 bg-rose-900/30 px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-900/50"
-                    >
-                      Account Status &amp; Settings
-                    </Link>
-                  </div>
-                )}
-                {errorMsg.toLowerCase().includes("signed in") && (
-                  <div className="flex items-center gap-2 pt-1">
-                    <a
-                      href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}`}
-                      className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-cyan-400"
-                    >
-                      <span>Sign In with SunShade Hub</span>
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </div>
-                )}
-              </div>
-            </Alert>
           )}
-
-          {/* Premise Challenge Drawer */}
-          <PremiseChallengeDrawer
-            isOpen={isDrawerOpen}
-            onClose={() => setIsDrawerOpen(false)}
-            onSubmit={handleChallengeSubmit}
-            isSubmitting={isFlagPending}
-            error={errorMsg}
-          />
-
-          {/* 6. Primary Action Buttons: Vote Commit CTA & Premise Challenge Button */}
-          <div className="flex flex-col sm:flex-row items-center gap-3">
-            <Button
-              type="button"
-              size="lg"
-              onClick={handleSubmit}
-              disabled={isPending || isFlagPending}
-              className={cn(
-                "h-13 w-full sm:flex-1 cursor-pointer rounded-xl text-sm font-bold tracking-wide shadow-lg transition-all duration-200",
-                "bg-gradient-to-r from-cyan-500 via-teal-400 to-cyan-500 text-slate-950 hover:opacity-95 hover:shadow-[0_0_25px_rgba(6,182,212,0.4)]"
-              )}
-            >
-              {isPending ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-950 border-t-transparent" />
-                  Sealing Cryptographic Vote...
-                </span>
-              ) : (
-                <span className="flex items-center gap-2">
-                  <Lock className="h-4 w-4" />
-                  Commit &amp; Seal Bivariate Vote
-                </span>
-              )}
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              onClick={() => {
-                setIsDrawerOpen((prev) => !prev)
-                setErrorMsg(null)
-              }}
-              disabled={isPending || isFlagPending}
-              className={cn(
-                "h-13 w-full sm:w-auto cursor-pointer rounded-xl border border-slate-800 bg-slate-900/60 px-4 text-xs font-semibold text-slate-300 transition-all duration-200 hover:border-amber-500/40 hover:bg-slate-900 hover:text-amber-300",
-                isDrawerOpen && "border-amber-500/50 bg-amber-950/30 text-amber-300"
-              )}
-            >
-              <Flag className="h-4 w-4 text-amber-400" />
-              <span>Challenge Premise / Framing</span>
-            </Button>
-          </div>
-
-          {/* Contextual Subtitle Indicating Relative Weight */}
-          <p className="text-center text-xs font-medium text-slate-400">
-            Conviction Profile:{" "}
-            <span
-              className={cn(
-                "font-semibold",
-                relativeWeightSubtitle === "Primary Personal Anchor"
-                  ? "text-cyan-300"
-                  : "text-slate-300"
-              )}
-              data-testid="stance-relative-weight"
-            >
-              {relativeWeightSubtitle}
-            </span>
-          </p>
-
-          <p className="text-center text-[11px] text-slate-400">
-            Immutable cryptographic commit. Zero pre-vote herd bias. Community
-            bivariate charts unlock after 24h.
-          </p>
         </motion.div>
-      ) : (
-        // Post-Submission Commit-and-Reveal Gate
-        <RevealGate
-          isSubmitted={true}
-          lockedUntil={lockedUntil}
-          userVote={userChallenge ? undefined : { likertScore, confidenceScore, comment }}
-          userChallenge={userChallenge ?? undefined}
-          isPremiseChallenge={Boolean(userChallenge)}
-          flagReason={userChallenge?.flagReason}
-          suggestedAxisComment={userChallenge?.suggestedAxisComment}
-          pollQuestion={questionText}
-          pollId={pollId}
-          relatedEcosystemRefs={relatedEcosystemRefs}
-          initialLocaleResults={initialLocaleResults}
-          initialGranularity={initialGranularity}
-        />
-      )}
+      </AnimatePresence>
     </div>
   )
 }

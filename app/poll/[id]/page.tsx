@@ -38,6 +38,12 @@ export default async function PollPage({
   } | null = null;
   let historicalZScore: number | null = null;
   let historicalBaseline: { mean: number; stddev: number } | null = null;
+  let userVote: {
+    likertScore: number;
+    confidenceScore: number;
+    lockedUntil?: string | null;
+    comment?: string | null;
+  } | null = null;
 
   try {
     const supabase = await createClient();
@@ -55,6 +61,23 @@ export default async function PollPage({
     }
 
     if (userContext.authenticated && userContext.userId) {
+      const { data: existingVote } = await supabase
+        .schema("valerie")
+        .from("poll_responses")
+        .select("likert_score, confidence_score, locked_until, comment")
+        .eq("poll_id", id)
+        .eq("user_id", userContext.userId)
+        .maybeSingle();
+
+      if (existingVote) {
+        userVote = {
+          likertScore: existingVote.likert_score,
+          confidenceScore: existingVote.confidence_score,
+          lockedUntil: existingVote.locked_until,
+          comment: existingVote.comment ?? undefined,
+        };
+      }
+
       const { data: metrics } = await supabase
         .schema("valerie")
         .rpc("calculate_user_stance_metrics", {
@@ -112,6 +135,7 @@ export default async function PollPage({
               targetLocaleCode={activePoll.target_locale_code ?? undefined}
               historicalZScore={historicalZScore}
               historicalBaseline={historicalBaseline}
+              initialVote={userVote}
             />
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-slate-400 backdrop-blur-md">

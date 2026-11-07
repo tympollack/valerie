@@ -102,26 +102,87 @@ export async function executeHeraldCronCycle(
   };
 }
 
+/**
+ * Invokes the sovereign decree compiler endpoint.
+ */
+export async function executeDecreeCronCycle(
+  env: Env
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  const endpoint =
+    env.DECREE_CRON_ENDPOINT ||
+    "https://rweehbzsflhhtwjrjnvy.supabase.co/functions/v1/valerie-decree-cron";
+  const secret = env.CRON_SECRET || env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!secret) {
+    return {
+      success: false,
+      error: "Missing CRON_SECRET or SUPABASE_SERVICE_ROLE_KEY for decree cron",
+    };
+  }
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ trigger: "cloudflare_worker_scheduled" }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return { success: false, error: `Decree cron returned ${res.status}: ${errText}` };
+    }
+
+    const data = await res.json();
+    return { success: true, data };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export default {
   /**
    * Cloudflare Cron Trigger Handler
    * Triggers automatically according to wrangler.jsonc schedule (e.g. 0 *\/2 * * *)
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      executeHeraldCronCycle(env).then((summary) => {
+    const scheduledTime = event.scheduledTime ? new Date(event.scheduledTime) : new Date();
+    const isHeraldCadence = scheduledTime.getUTCHours() % 2 === 0;
+
+    const tasks: Promise<unknown>[] = [
+      executeDecreeCronCycle(env).then((decreeSummary) => {
         console.log(
           JSON.stringify({
             level: "info",
-            event: "VALERIE_HERALD_CRON_COMPLETED",
-            dispatched: summary.clusters_dispatched,
-            published_polls: summary.polls_published,
-            duration_ms: summary.duration_ms,
-            timestamp: summary.timestamp,
+            event: "VALERIE_DECREE_CRON_COMPLETED",
+            success: decreeSummary.success,
+            error: decreeSummary.error,
+            data: decreeSummary.data,
           })
         );
-      })
-    );
+      }),
+    ];
+
+    if (isHeraldCadence) {
+      tasks.push(
+        executeHeraldCronCycle(env).then((summary) => {
+          console.log(
+            JSON.stringify({
+              level: "info",
+              event: "VALERIE_HERALD_CRON_COMPLETED",
+              dispatched: summary.clusters_dispatched,
+              published_polls: summary.polls_published,
+              duration_ms: summary.duration_ms,
+              timestamp: summary.timestamp,
+            })
+          );
+        })
+      );
+    }
+
+    ctx.waitUntil(Promise.all(tasks));
   },
 
   /**

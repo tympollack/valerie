@@ -6,7 +6,7 @@
  * locale resolution, and worker fetch routing.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { normalizeGdeltTone, parseGdeltDate } from "../../workers/valerie-herald-cron/src/gdelt";
 import { parseRssXml, estimateTextSentiment } from "../../workers/valerie-herald-cron/src/rss";
 import {
@@ -15,7 +15,7 @@ import {
   clusterNewsArticles,
 } from "../../workers/valerie-herald-cron/src/clustering";
 import { sanitizeLogContent, buildHeraldHeaders } from "../../workers/valerie-herald-cron/src/heraldClient";
-import worker, { executeHeraldCronCycle } from "../../workers/valerie-herald-cron/src/index";
+import worker, { executeHeraldCronCycle, executeDecreeCronCycle } from "../../workers/valerie-herald-cron/src/index";
 
 describe("Valerie Herald Cron Worker", () => {
   describe("GDELT Ingestion", () => {
@@ -212,6 +212,114 @@ describe("Valerie Herald Cron Worker", () => {
       expect(authRes.status).toBe(200);
       const body = await authRes.json();
       expect(body.dry_run).toBe(true);
+    });
+  });
+
+  describe("Decree Compilation Cron Cycle", () => {
+    it("returns error when secrets are missing", async () => {
+      const result = await executeDecreeCronCycle({});
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Missing CRON_SECRET");
+    });
+
+    it("invokes decree cron endpoint with Bearer auth and parses success response", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "success", compiledDecrees: 1 }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const result = await executeDecreeCronCycle({
+        CRON_SECRET: "test-secret",
+        DECREE_CRON_ENDPOINT: "https://mock.supabase.co/functions/v1/valerie-decree-cron",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.compiledDecrees).toBe(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://mock.supabase.co/functions/v1/valerie-decree-cron",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer test-secret",
+          }),
+        })
+      );
+    });
+
+    it("handles HTTP error responses gracefully", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => "Internal server error",
+      });
+      globalThis.fetch = mockFetch;
+
+      const result = await executeDecreeCronCycle({
+        CRON_SECRET: "test-secret",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("500: Internal server error");
+    });
+  });
+
+  describe("Scheduled Trigger Dual Cadence Routing", () => {
+    it("dispatches only decree cron on odd hours (01:00 UTC)", async () => {
+      const waitTasks: Promise<any>[] = [];
+      const mockCtx: any = {
+        waitUntil: (p: Promise<any>) => waitTasks.push(p),
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "success", compiledDecrees: 0 }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const event: any = {
+        cron: "0 * * * *",
+        scheduledTime: new Date("2026-11-07T01:00:00Z").getTime(),
+      };
+
+      await worker.scheduled(event, { CRON_SECRET: "test-sec" }, mockCtx);
+      await Promise.all(waitTasks);
+
+      // Only decree cron endpoint was invoked, not herald agent
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("valerie-decree-cron"),
+        expect.anything()
+      );
+    });
+
+    it("dispatches both decree and herald cycles on even hours (02:00 UTC)", async () => {
+      const waitTasks: Promise<any>[] = [];
+      const mockCtx: any = {
+        waitUntil: (p: Promise<any>) => waitTasks.push(p),
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "success", compiledDecrees: 0 }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const event: any = {
+        cron: "0 * * * *",
+        scheduledTime: new Date("2026-11-07T02:00:00Z").getTime(),
+      };
+
+      await worker.scheduled(event, { CRON_SECRET: "test-sec" }, mockCtx);
+      await Promise.all(waitTasks);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("valerie-decree-cron"),
+        expect.anything()
+      );
     });
   });
 });

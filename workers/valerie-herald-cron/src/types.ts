@@ -24,6 +24,7 @@ export interface KVNamespace {
 
 export interface Env {
   HERALD_AGENT_ENDPOINT?: string;
+  DECREE_CRON_ENDPOINT?: string;
   CRON_SECRET?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   WATCHDOG_TRIGGER_SECRET?: string;
