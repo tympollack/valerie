@@ -148,8 +148,25 @@ export default {
    * Triggers automatically according to wrangler.jsonc schedule (e.g. 0 *\/2 * * *)
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(
-      Promise.all([
+    const scheduledTime = event.scheduledTime ? new Date(event.scheduledTime) : new Date();
+    const isHeraldCadence = scheduledTime.getUTCHours() % 2 === 0;
+
+    const tasks: Promise<unknown>[] = [
+      executeDecreeCronCycle(env).then((decreeSummary) => {
+        console.log(
+          JSON.stringify({
+            level: "info",
+            event: "VALERIE_DECREE_CRON_COMPLETED",
+            success: decreeSummary.success,
+            error: decreeSummary.error,
+            data: decreeSummary.data,
+          })
+        );
+      }),
+    ];
+
+    if (isHeraldCadence) {
+      tasks.push(
         executeHeraldCronCycle(env).then((summary) => {
           console.log(
             JSON.stringify({
@@ -161,20 +178,11 @@ export default {
               timestamp: summary.timestamp,
             })
           );
-        }),
-        executeDecreeCronCycle(env).then((decreeSummary) => {
-          console.log(
-            JSON.stringify({
-              level: "info",
-              event: "VALERIE_DECREE_CRON_COMPLETED",
-              success: decreeSummary.success,
-              error: decreeSummary.error,
-              data: decreeSummary.data,
-            })
-          );
-        }),
-      ])
-    );
+        })
+      );
+    }
+
+    ctx.waitUntil(Promise.all(tasks));
   },
 
   /**

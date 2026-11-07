@@ -319,5 +319,82 @@ describe("Reveal Alert Notifier Trigger (TASK-VAL-REVEAL-NOTIF-TRIGGER)", () => 
       expect(result.totalDispatched).toBe(0);
       expect(updatedRecords.length).toBe(0); // Not marked as notified!
     });
+
+    it("marks permanently ineligible responses as reveal_notified to avoid queue blocking", async () => {
+      const mockResponses = [
+        {
+          user_id: "u-ineligible",
+          poll_id: "poll-999",
+          locked_until: "2026-10-31T12:00:00Z",
+          likert_score: 0,
+          confidence_score: 50,
+          reveal_notified: false,
+        },
+      ];
+      // User is not in user_digest_preferences or has opted out
+      const updatedRecords: any[] = [];
+      const mockClient = {
+        schema: vi.fn().mockReturnValue({
+          from: vi.fn().mockImplementation((table: string) => {
+            if (table === "system_settings") {
+              return {
+                select: vi.fn().mockReturnValue({
+                  in: vi.fn().mockResolvedValue({
+                    data: [{ key: "notifications.enabled", value: true }],
+                    error: null,
+                  }),
+                }),
+              };
+            }
+            if (table === "poll_responses") {
+              const chain: any = {
+                lte: vi.fn().mockImplementation(() => chain),
+                eq: vi.fn().mockImplementation(() => chain),
+                limit: vi.fn().mockResolvedValue({ data: mockResponses, error: null }),
+                in: vi.fn().mockImplementation(() => chain),
+                gte: vi.fn().mockResolvedValue({ data: [], error: null }),
+              };
+              return {
+                select: vi.fn().mockReturnValue(chain),
+                update: vi.fn().mockImplementation((patch: any) => ({
+                  eq: vi.fn().mockReturnValue({
+                    eq: vi.fn().mockImplementation(() => {
+                      updatedRecords.push(patch);
+                      return Promise.resolve({ data: null, error: null });
+                    }),
+                  }),
+                })),
+              };
+            }
+            if (table === "user_digest_preferences") {
+              return {
+                select: vi.fn().mockReturnValue({
+                  in: vi.fn().mockReturnValue({
+                    eq: vi.fn().mockReturnValue({
+                      neq: vi.fn().mockResolvedValue({ data: [], error: null }),
+                    }),
+                  }),
+                }),
+              };
+            }
+            return {
+              select: vi.fn().mockReturnValue({
+                in: vi.fn().mockResolvedValue({ data: [], error: null }),
+              }),
+            };
+          }),
+        }),
+      } as any;
+
+      const result = await processRevealNotifier(mockClient, "re_test_key", {
+        tokenSecret: "secret",
+      });
+
+      expect(result.status).toBe("success");
+      expect(result.totalEligible).toBe(0);
+      expect(result.totalDispatched).toBe(0);
+      expect(updatedRecords.length).toBe(1);
+      expect(updatedRecords[0].reveal_notified).toBe(true);
+    });
   });
 });

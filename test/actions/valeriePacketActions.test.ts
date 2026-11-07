@@ -3,6 +3,7 @@ import { getClusterPacketAction } from "@/app/actions/valeriePacketActions";
 
 let mockRpcResult: any = { data: null, error: null };
 let mockPollsQueryResult: any = { data: [], error: null };
+let mockCompanionQueryResult: any = null;
 let mockUser: any = { id: "usr-456" };
 
 const mockRpc = vi.fn(async (rpcName: string, params: any) => {
@@ -10,11 +11,22 @@ const mockRpc = vi.fn(async (rpcName: string, params: any) => {
 });
 
 const createChainableQuery = () => {
+  let isCompanion = false;
   const chain: any = {
     eq: vi.fn(() => chain),
+    neq: vi.fn(() => {
+      isCompanion = true;
+      return chain;
+    }),
     not: vi.fn(() => chain),
+    or: vi.fn(() => chain),
     order: vi.fn(() => chain),
-    limit: vi.fn(async () => mockPollsQueryResult),
+    limit: vi.fn(async (n: number) => {
+      if (isCompanion && mockCompanionQueryResult) {
+        return mockCompanionQueryResult;
+      }
+      return mockPollsQueryResult;
+    }),
   };
   return chain;
 };
@@ -79,6 +91,7 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
     vi.clearAllMocks();
     mockRpcResult = { data: null, error: null };
     mockPollsQueryResult = { data: [], error: null };
+    mockCompanionQueryResult = null;
     mockUser = { id: "usr-456" };
   });
 
@@ -140,6 +153,18 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
     expect(result.error).toContain("Unauthorized user query");
   });
 
+  it("blocks anonymous unauthenticated visitor from querying another voter's packet (SEC_0001)", async () => {
+    mockUser = null;
+
+    const result = await getClusterPacketAction({
+      userId: "usr-victim",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Unauthorized user query");
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it("gracefully falls back to polls table query when RPC fails", async () => {
     mockRpcResult = { data: null, error: { message: "function valerie.assemble_cluster_packet does not exist" } };
     mockPollsQueryResult = {
@@ -150,6 +175,11 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
           axis_category: "Governance",
           cluster_id: "clust-1",
         },
+      ],
+      error: null,
+    };
+    mockCompanionQueryResult = {
+      data: [
         {
           id: "poll-fb-2",
           question_text: "Fallback Question 2",

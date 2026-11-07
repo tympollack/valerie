@@ -320,12 +320,26 @@ export function BivariatePollCard({
     ]
   )
 
+  const handleResetPacketSession = useCallback(() => {
+    setActivePacketIndex(0)
+    setIsPacketComplete(false)
+    setIsSubmitted(false)
+    setLikertScore(0)
+    setConfidenceScore(75)
+    setComment("")
+    setHasInteractedLikert(false)
+    setUserChallenge(null)
+    setErrorMsg(null)
+  }, [])
+
   if (isPacketComplete) {
     return (
       <div className={cn("mx-auto w-full max-w-2xl", className)}>
         <ChapterEndCard
           message="You have weighed in on all active measures in this district today. Your voice is sealed."
           totalCompleted={totalPacketPolls}
+          pollId={currentPollId || pollId}
+          onResetSession={handleResetPacketSession}
         />
       </div>
     )

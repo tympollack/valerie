@@ -39,6 +39,8 @@ export default async function Page() {
   let historicalZScore: number | null = null
   let historicalBaseline: { mean: number; stddev: number } | null = null
   let isDistrictCompleted = false
+  let completedVoterCount: number | undefined = undefined
+  let completedDistrictPollId: string | undefined = undefined
 
   try {
     const packetResult = await getClusterPacketAction({
@@ -94,6 +96,23 @@ export default async function Page() {
           }
         }
       }
+
+      if (isDistrictCompleted) {
+        const { count, data: latestResponse } = await supabase
+          .schema("valerie")
+          .from("poll_responses")
+          .select("poll_id", { count: "exact" })
+          .eq("user_id", userContext.userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+
+        if (typeof count === "number" && count > 0) {
+          completedVoterCount = count
+        }
+        if (Array.isArray(latestResponse) && latestResponse.length > 0) {
+          completedDistrictPollId = latestResponse[0].poll_id
+        }
+      }
     }
   } catch {
     activePoll = null
@@ -141,7 +160,9 @@ export default async function Page() {
           ) : isDistrictCompleted ? (
             <ChapterEndCard
               message="You have weighed in on all active measures in this district today. Your voice is sealed."
-              totalCompleted={3}
+              totalCompleted={completedVoterCount || 3}
+              pollId={completedDistrictPollId}
+              resultsHref={completedDistrictPollId ? `/poll/${completedDistrictPollId}` : "/polls"}
             />
           ) : (
             <div className="rounded-2xl border border-slate-800/80 bg-slate-950/80 p-8 text-center backdrop-blur-xl space-y-4 shadow-[0_0_25px_rgba(6,182,212,0.05)]">

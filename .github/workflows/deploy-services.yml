@@ -110,14 +110,16 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase functions deploy valerie-decree-cron \
-            --project-ref "$PROJECT_ID"
+            --project-ref "$PROJECT_ID" \
+            --no-verify-jwt
 
       - name: Deploy Valerie Reveal Notifier
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase functions deploy valerie-reveal-notifier \
-            --project-ref "$PROJECT_ID"
+            --project-ref "$PROJECT_ID" \
+            --no-verify-jwt
 
   deploy-cloudflare-worker:
     name: Deploy Valerie Herald Cron Worker
@@ -171,6 +173,7 @@ jobs:
           fi
 
           echo "HERALD_AGENT_ENDPOINT=https://${PID}.supabase.co/functions/v1/valerie-herald-agent" >> $GITHUB_ENV
+          echo "DECREE_CRON_ENDPOINT=https://${PID}.supabase.co/functions/v1/valerie-decree-cron" >> $GITHUB_ENV
 
       - name: Deploy Worker to Cloudflare
         uses: cloudflare/wrangler-action@v3
@@ -178,7 +181,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/valerie-herald-cron
-          command: deploy --var HERALD_AGENT_ENDPOINT:${{ env.HERALD_AGENT_ENDPOINT }}
+          command: deploy --var HERALD_AGENT_ENDPOINT:${{ env.HERALD_AGENT_ENDPOINT }} --var DECREE_CRON_ENDPOINT:${{ env.DECREE_CRON_ENDPOINT }}
           secrets: |
             CRON_SECRET
             TRIGGER_SECRET

@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 export interface ChapterEndCardProps {
   message?: string;
   totalCompleted?: number;
+  pollId?: string;
+  resultsHref?: string;
   onResetSession?: () => void;
   className?: string;
 }
@@ -27,9 +29,12 @@ export interface ChapterEndCardProps {
 export function ChapterEndCard({
   message = "You have weighed in on all active measures in this district today. Your voice is sealed.",
   totalCompleted = 3,
+  pollId,
+  resultsHref,
   onResetSession,
   className,
 }: ChapterEndCardProps) {
+  const destinationHref = resultsHref || (pollId ? `/poll/${pollId}` : "/polls");
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.96, y: 16 }}
@@ -92,7 +97,7 @@ export function ChapterEndCard({
 
         {/* Primary Navigation Actions */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full max-w-md pt-5">
-          <Link href="/" className="w-full sm:w-auto flex-1">
+          <Link href={destinationHref} className="w-full sm:w-auto flex-1">
             <Button
               className="w-full h-11 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-slate-950 font-bold text-xs tracking-wide shadow-lg hover:opacity-95 cursor-pointer"
             >

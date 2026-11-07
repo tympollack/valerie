@@ -80,8 +80,8 @@ export async function getClusterPacketAction(options: {
       // Unauthenticated visitor
     }
 
-    // If caller provided a userId, ensure it does not spoof another user
-    if (options.userId && verifiedUserId && options.userId !== verifiedUserId) {
+    // If caller provided a userId, ensure caller is authenticated and matches verifiedUserId (SEC_0001 guard)
+    if (options.userId && options.userId !== verifiedUserId) {
       console.warn("[Project Valerie] Blocked attempt to query another user's deliberation packet");
       return { success: false, data: EMPTY_PACKET, error: "Unauthorized user query." };
     }
@@ -102,14 +102,14 @@ export async function getClusterPacketAction(options: {
         : supabase;
 
     const { data, error } = await target.rpc("assemble_cluster_packet", {
-      p_user_id: verifiedUserId || options.userId || null,
+      p_user_id: verifiedUserId || null,
       p_h3_cell: verifiedH3,
     });
 
     if (error) {
       console.warn("[Project Valerie] assemble_cluster_packet RPC error, falling back to query:", error);
       return await fallbackPacketQuery(supabase, {
-        userId: verifiedUserId || options.userId || null,
+        userId: verifiedUserId || null,
         h3Cell: verifiedH3,
       });
     }
@@ -180,25 +180,51 @@ async function fallbackPacketQuery(
     }
 
     if (options.h3Cell) {
-      query = query.eq("h3_res7", options.h3Cell);
+      query = query.or(`h3_res7.eq.${options.h3Cell},h3_res7.is.null`);
     }
 
-    const { data: polls, error } = await query
+    const { data: anchorRows, error: anchorError } = await query
       .order("created_at", { ascending: false })
-      .limit(3);
+      .limit(1);
 
-    if (error || !Array.isArray(polls) || polls.length === 0) {
+    if (anchorError || !Array.isArray(anchorRows) || anchorRows.length === 0) {
       return { success: true, data: EMPTY_PACKET };
     }
 
-    const anchor = polls[0];
-    // Only group companion polls that actually share the anchor's cluster or material domain
-    const companions = polls
-      .slice(1)
-      .filter((p: any) =>
-        (anchor.cluster_id && p.cluster_id === anchor.cluster_id) ||
-        (anchor.material_domain && p.material_domain === anchor.material_domain)
-      );
+    const anchor = anchorRows[0];
+    let companions: PacketPollItem[] = [];
+
+    // Query up to 2 companions sharing the anchor's cluster_id or material_domain (BUG_0007)
+    if (anchor.cluster_id || anchor.material_domain) {
+      let companionQuery = target
+        .from("polls")
+        .select("id, question_text, axis_category, detected_locales, target_locale_code, h3_res7, related_ecosystem_refs, cluster_id, material_domain, created_at")
+        .eq("is_active", true)
+        .neq("id", anchor.id);
+
+      const excludeIds = votedPollIds.length > 0 ? [...votedPollIds, anchor.id] : [anchor.id];
+      companionQuery = companionQuery.not("id", "in", `(${excludeIds.join(",")})`);
+
+      if (options.h3Cell) {
+        companionQuery = companionQuery.or(`h3_res7.eq.${options.h3Cell},h3_res7.is.null`);
+      }
+
+      if (anchor.cluster_id && anchor.material_domain) {
+        companionQuery = companionQuery.or(`cluster_id.eq.${anchor.cluster_id},material_domain.eq.${anchor.material_domain}`);
+      } else if (anchor.cluster_id) {
+        companionQuery = companionQuery.eq("cluster_id", anchor.cluster_id);
+      } else if (anchor.material_domain) {
+        companionQuery = companionQuery.eq("material_domain", anchor.material_domain);
+      }
+
+      const { data: companionRows } = await companionQuery
+        .order("created_at", { ascending: false })
+        .limit(2);
+
+      if (Array.isArray(companionRows)) {
+        companions = companionRows;
+      }
+    }
 
     return {
       success: true,
