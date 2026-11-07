@@ -32,8 +32,8 @@ export interface RevealNotificationSettings {
 
 export const DEFAULT_REVEAL_SETTINGS: RevealNotificationSettings = {
   enabled: true,
-  fromEmail: "deliberations@valerie.sunshade.icu",
-  fromName: "The Votary (Project Valerie)",
+  fromEmail: "digest@mail.votary.app",
+  fromName: "The Votary",
   maxDailyAlertsPerUser: 2,
 };
 
@@ -322,13 +322,23 @@ export async function processRevealNotifier(
   }
 
   const userIds = Array.from(new Set(responses.map((r: any) => r.user_id)));
-  const { data: prefs } = await (adminClient as any)
+  const { data: prefs, error: prefsError } = await (adminClient as any)
     .schema("valerie")
     .from("user_digest_preferences")
     .select("user_id, proximity_alerts_enabled, email_cadence, unsubscribe_token")
     .in("user_id", userIds)
     .eq("proximity_alerts_enabled", true)
     .neq("email_cadence", "off");
+
+  if (prefsError) {
+    console.error("[valerie-reveal-notifier] Preferences query error, halting to prevent discarding alerts:", prefsError);
+    return {
+      status: "error" as const,
+      totalEligible: 0,
+      totalDispatched: 0,
+      error: `Preferences query failed: ${prefsError.message}`,
+    };
+  }
 
   const allowedUserMap = new Map<string, string>();
   if (Array.isArray(prefs)) {
@@ -338,16 +348,16 @@ export async function processRevealNotifier(
   }
 
   // Permanently ineligible responses: user has proximity alerts disabled or email cadence off
-  // Mark these notified so they do not cause head-of-line blocking on future runs (BUG_0003)
+  // Mark these notified with reveal_notified_at = null so they do not cause head-of-line blocking
+  // and do not consume the user's daily email allowance (BUG_0001, BUG_0002)
   const permanentlyIneligible = responses.filter((r: any) => !allowedUserMap.has(r.user_id));
   if (permanentlyIneligible.length > 0) {
-    const ineligibleAtIso = new Date().toISOString();
     for (const r of permanentlyIneligible) {
       try {
         const { error: ineligErr } = await (adminClient as any)
           .schema("valerie")
           .from("poll_responses")
-          .update({ reveal_notified: true, reveal_notified_at: ineligibleAtIso })
+          .update({ reveal_notified: true, reveal_notified_at: null })
           .eq("poll_id", r.poll_id)
           .eq("user_id", r.user_id);
         if (ineligErr) {
@@ -438,11 +448,11 @@ export async function processRevealNotifier(
     try {
       const { data: userData } = await adminClient.auth.admin.getUserById(item.userId);
       if (!userData?.user?.email) {
-        // Mark notified to prevent infinite retry loops on accounts without email
+        // Mark notified with reveal_notified_at = null so it does not count against daily allowance
         await (adminClient as any)
           .schema("valerie")
           .from("poll_responses")
-          .update({ reveal_notified: true, reveal_notified_at: new Date().toISOString() })
+          .update({ reveal_notified: true, reveal_notified_at: null })
           .eq("poll_id", item.pollId)
           .eq("user_id", item.userId);
         continue;
@@ -537,8 +547,8 @@ Deno.serve(async (req: Request) => {
 
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
   const cronSecret = Deno.env.get("CRON_SECRET") || Deno.env.get("WORKER_AUTH_TOKEN");
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return new Response(JSON.stringify({ error: "Unauthorized worker invocation" }), {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+    return new Response(JSON.stringify({ error: "Unauthorized worker invocation: missing or invalid worker secret" }), {
       status: 401,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     });

@@ -98,11 +98,13 @@ export default async function Page() {
       }
 
       if (isDistrictCompleted) {
+        const since24hIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
         const { count, data: latestResponse } = await supabase
           .schema("valerie")
           .from("poll_responses")
           .select("poll_id", { count: "exact" })
           .eq("user_id", userContext.userId)
+          .gte("created_at", since24hIso)
           .order("created_at", { ascending: false })
           .limit(1)
 
@@ -111,6 +113,18 @@ export default async function Page() {
         }
         if (Array.isArray(latestResponse) && latestResponse.length > 0) {
           completedDistrictPollId = latestResponse[0].poll_id
+        } else {
+          // Fallback to most recent vote if no votes within last 24h window
+          const { data: fallbackResponse } = await supabase
+            .schema("valerie")
+            .from("poll_responses")
+            .select("poll_id")
+            .eq("user_id", userContext.userId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+          if (Array.isArray(fallbackResponse) && fallbackResponse.length > 0) {
+            completedDistrictPollId = fallbackResponse[0].poll_id
+          }
         }
       }
     }

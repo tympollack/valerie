@@ -51,6 +51,13 @@ export interface CompanionPollItem {
   [key: string]: any
 }
 
+export interface InitialVoteData {
+  likertScore: number
+  confidenceScore: number
+  lockedUntil?: string | null
+  comment?: string | null
+}
+
 export interface BivariatePollCardProps {
   pollId?: string
   questionText?: string
@@ -58,6 +65,7 @@ export interface BivariatePollCardProps {
   companionPolls?: CompanionPollItem[]
   packetId?: string
   isSurge?: boolean
+  initialVote?: InitialVoteData | null
   onPacketComplete?: () => void
   onVoteSuccess?: (vote: BivariateVote) => void
   onFlagSuccess?: (challenge: { flagReason: string; suggestedAxisComment?: string }) => void
@@ -82,6 +90,7 @@ export function BivariatePollCard({
   companionPolls,
   packetId,
   isSurge = false,
+  initialVote,
   onPacketComplete,
   onVoteSuccess,
   onFlagSuccess,
@@ -125,14 +134,14 @@ export function BivariatePollCard({
   const nextCompanion = hasNextCompanion ? packetSequence[activePacketIndex + 1] : null
 
   // --- Form state
-  const [likertScore, setLikertScore] = useState<number>(0)
-  const [confidenceScore, setConfidenceScore] = useState<number>(75)
-  const [comment, setComment] = useState<string>("")
-  const [hasInteractedLikert, setHasInteractedLikert] = useState<boolean>(false)
+  const [likertScore, setLikertScore] = useState<number>(initialVote?.likertScore ?? 0)
+  const [confidenceScore, setConfidenceScore] = useState<number>(initialVote?.confidenceScore ?? 75)
+  const [comment, setComment] = useState<string>(initialVote?.comment ?? "")
+  const [hasInteractedLikert, setHasInteractedLikert] = useState<boolean>(Boolean(initialVote))
 
   // --- Submission & Commit-and-Reveal state
-  const [isSubmitted, setIsSubmitted] = useState<boolean>(false)
-  const [lockedUntil, setLockedUntil] = useState<string | undefined>(undefined)
+  const [isSubmitted, setIsSubmitted] = useState<boolean>(Boolean(initialVote))
+  const [lockedUntil, setLockedUntil] = useState<string | undefined>(initialVote?.lockedUntil ?? undefined)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false)
@@ -320,18 +329,6 @@ export function BivariatePollCard({
     ]
   )
 
-  const handleResetPacketSession = useCallback(() => {
-    setActivePacketIndex(0)
-    setIsPacketComplete(false)
-    setIsSubmitted(false)
-    setLikertScore(0)
-    setConfidenceScore(75)
-    setComment("")
-    setHasInteractedLikert(false)
-    setUserChallenge(null)
-    setErrorMsg(null)
-  }, [])
-
   if (isPacketComplete) {
     return (
       <div className={cn("mx-auto w-full max-w-2xl", className)}>
@@ -339,7 +336,6 @@ export function BivariatePollCard({
           message="You have weighed in on all active measures in this district today. Your voice is sealed."
           totalCompleted={totalPacketPolls}
           pollId={currentPollId || pollId}
-          onResetSession={handleResetPacketSession}
         />
       </div>
     )

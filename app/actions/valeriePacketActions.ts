@@ -14,7 +14,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
 import { extractSSOToken } from "@/lib/auth/ssoHandshake";
-import { resolveVoterLocale } from "@/lib/geo/resolveVoterLocale";
+import { resolveVoterLocale, type ResolvedVoterLocale } from "@/lib/geo/resolveVoterLocale";
 
 export interface PacketPollItem {
   id: string;
@@ -88,11 +88,15 @@ export async function getClusterPacketAction(options: {
 
     // Securely resolve geographic tier from trusted edge headers (SEC_0002 guard)
     let verifiedH3: string | null = null;
+    let resolvedLocale: ResolvedVoterLocale | null = null;
     try {
-      const voterLocale = await resolveVoterLocale();
-      verifiedH3 = voterLocale.h3_res7 || options.h3Cell || null;
+      resolvedLocale = await resolveVoterLocale();
+      verifiedH3 = resolvedLocale?.h3_res7 || options.h3Cell || null;
     } catch {
       verifiedH3 = options.h3Cell || null;
+      if (options.h3Cell) {
+        resolvedLocale = { country_iso: null, admin1_code: null, admin2_code: null, h3_res7: options.h3Cell };
+      }
     }
 
     // Invoke valerie.assemble_cluster_packet RPC
@@ -111,6 +115,7 @@ export async function getClusterPacketAction(options: {
       return await fallbackPacketQuery(supabase, {
         userId: verifiedUserId || null,
         h3Cell: verifiedH3,
+        voterLocale: resolvedLocale,
       });
     }
 
@@ -147,12 +152,80 @@ export async function getClusterPacketAction(options: {
 }
 
 /**
+ * Evaluates whether a candidate poll is eligible for a voter given coarse geographic locale tiers.
+ * Prevents presenting out-of-district or out-of-state ballots in fallback packet queries (BUG_0003).
+ */
+export function isPollEligibleForVoterLocale(
+  poll: {
+    h3_res7?: string | null;
+    target_locale_code?: string | null;
+    detected_locales?: string[] | null;
+  },
+  locale?: {
+    country_iso?: string | null;
+    admin1_code?: string | null;
+    h3_res7?: string | null;
+  } | null
+): boolean {
+  // If poll has an H3 cell, it must match the voter's H3 cell
+  if (poll.h3_res7) {
+    return Boolean(locale?.h3_res7 && poll.h3_res7 === locale.h3_res7);
+  }
+
+  // Poll has no H3 cell (higher-tier or global)
+  const targetCode = poll.target_locale_code?.trim().toUpperCase();
+  if (!targetCode || targetCode === "GLOBAL" || targetCode === "ALL") {
+    return true;
+  }
+
+  // If voter has no locale info, cannot confirm match for region-targeted ballot
+  if (!locale) {
+    return false;
+  }
+
+  const voterCountry = locale.country_iso?.trim().toUpperCase() || null;
+  const voterAdmin1 = locale.admin1_code?.trim().toUpperCase() || null;
+
+  if (voterAdmin1 && (targetCode === voterAdmin1 || targetCode.endsWith(`-${voterAdmin1}`))) {
+    return true;
+  }
+
+  if (voterCountry && targetCode === voterCountry) {
+    return true;
+  }
+
+  if (Array.isArray(poll.detected_locales) && poll.detected_locales.length > 0) {
+    const normLocales = poll.detected_locales.map((l) => String(l).trim().toUpperCase());
+    if (voterAdmin1 && normLocales.some((l) => l === voterAdmin1 || l.endsWith(`-${voterAdmin1}`))) {
+      return true;
+    }
+    if (voterCountry && normLocales.includes(voterCountry)) {
+      return true;
+    }
+    if (normLocales.includes("GLOBAL")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Graceful fallback query when RPC is pending database deployment in staging/local environments.
- * Strictly respects unvoted eligibility and thematic cluster linkage (BUG_0002, BUG_0005).
+ * Strictly respects unvoted eligibility, thematic cluster linkage, and geographic tiering (BUG_0002, BUG_0003, BUG_0005).
  */
 async function fallbackPacketQuery(
   supabase: any,
-  options: { h3Cell?: string | null; userId?: string | null }
+  options: {
+    h3Cell?: string | null;
+    userId?: string | null;
+    voterLocale?: {
+      country_iso?: string | null;
+      admin1_code?: string | null;
+      admin2_code?: string | null;
+      h3_res7?: string | null;
+    } | null;
+  }
 ): Promise<GetClusterPacketResult> {
   try {
     const target =
@@ -185,13 +258,27 @@ async function fallbackPacketQuery(
 
     const { data: anchorRows, error: anchorError } = await query
       .order("created_at", { ascending: false })
-      .limit(1);
+      .limit(25);
 
     if (anchorError || !Array.isArray(anchorRows) || anchorRows.length === 0) {
       return { success: true, data: EMPTY_PACKET };
     }
 
-    const anchor = anchorRows[0];
+    const effectiveLocale =
+      options.voterLocale ??
+      (options.h3Cell
+        ? { h3_res7: options.h3Cell, country_iso: null, admin1_code: null, admin2_code: null }
+        : null);
+
+    const eligibleAnchors = anchorRows.filter((p: any) =>
+      isPollEligibleForVoterLocale(p, effectiveLocale)
+    );
+
+    if (eligibleAnchors.length === 0) {
+      return { success: true, data: EMPTY_PACKET };
+    }
+
+    const anchor = eligibleAnchors[0];
     let companions: PacketPollItem[] = [];
 
     // Query up to 2 companions sharing the anchor's cluster_id or material_domain (BUG_0007)
@@ -219,10 +306,12 @@ async function fallbackPacketQuery(
 
       const { data: companionRows } = await companionQuery
         .order("created_at", { ascending: false })
-        .limit(2);
+        .limit(10);
 
       if (Array.isArray(companionRows)) {
-        companions = companionRows;
+        companions = companionRows
+          .filter((p: any) => isPollEligibleForVoterLocale(p, effectiveLocale))
+          .slice(0, 2);
       }
     }
 

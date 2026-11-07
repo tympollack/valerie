@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getClusterPacketAction } from "@/app/actions/valeriePacketActions";
+import { getClusterPacketAction, isPollEligibleForVoterLocale } from "@/app/actions/valeriePacketActions";
 
 let mockRpcResult: any = { data: null, error: null };
 let mockPollsQueryResult: any = { data: [], error: null };
@@ -213,5 +213,104 @@ describe("valeriePacketActions: getClusterPacketAction", () => {
     expect(result.data.anchor_poll).toBeNull();
     expect(result.data.companion_polls).toEqual([]);
     expect(result.data.total_packet_polls).toBe(0);
+  });
+
+  describe("isPollEligibleForVoterLocale (BUG_0003)", () => {
+    const ohioLocale = {
+      country_iso: "US",
+      admin1_code: "US-OH",
+      admin2_code: "Franklin",
+      h3_res7: "87283472bffffff",
+    };
+
+    it("accepts polls with matching H3 cell", () => {
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: "87283472bffffff" },
+          ohioLocale
+        )
+      ).toBe(true);
+    });
+
+    it("rejects polls with conflicting H3 cell even if country matches", () => {
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: "87283472affffff", target_locale_code: "US" },
+          ohioLocale
+        )
+      ).toBe(false);
+    });
+
+    it("rejects out-of-state null-cell polls for Ohio voter", () => {
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: null, target_locale_code: "US-CA" },
+          ohioLocale
+        )
+      ).toBe(false);
+    });
+
+    it("accepts matching-state null-cell polls for Ohio voter", () => {
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: null, target_locale_code: "US-OH" },
+          ohioLocale
+        )
+      ).toBe(true);
+    });
+
+    it("accepts nationwide and global null-cell polls for Ohio voter", () => {
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: null, target_locale_code: "US" },
+          ohioLocale
+        )
+      ).toBe(true);
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: null, target_locale_code: "GLOBAL" },
+          ohioLocale
+        )
+      ).toBe(true);
+      expect(
+        isPollEligibleForVoterLocale(
+          { h3_res7: null, target_locale_code: null },
+          ohioLocale
+        )
+      ).toBe(true);
+    });
+
+    it("skips out-of-state polls during fallback query to select eligible measure", async () => {
+      mockRpcResult = { data: null, error: { message: "RPC failed" } };
+      // First poll is California (ineligible for Ohio voter), second is Ohio (eligible)
+      mockPollsQueryResult = {
+        data: [
+          {
+            id: "poll-california",
+            question_text: "California Water Conservation Act",
+            target_locale_code: "US-CA",
+            h3_res7: null,
+            cluster_id: "water-1",
+          },
+          {
+            id: "poll-ohio",
+            question_text: "Ohio River Watershed Initiative",
+            target_locale_code: "US-OH",
+            h3_res7: null,
+            cluster_id: "water-1",
+          },
+        ],
+        error: null,
+      };
+
+      const result = await getClusterPacketAction({
+        userId: "usr-456",
+        h3Cell: "87283472bffffff",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data.anchor_poll?.id).toBe("poll-ohio");
+      expect(result.data.anchor_poll?.question_text).toBe("Ohio River Watershed Initiative");
+    });
   });
 });
