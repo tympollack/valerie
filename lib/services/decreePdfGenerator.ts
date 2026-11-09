@@ -19,15 +19,34 @@ function escapePdfText(str: string): string {
 
 /**
  * Generates a valid standard-compliant PDF document byte array in high-contrast legal format.
- * Executes in < 25ms.
+ * Supports multi-page flow and precise cross-references.
  */
 export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Array {
-  const lines: string[] = [];
-  const textCommands: string[] = [];
-
   // Margins and Dimensions (Standard US Letter: 612 x 792 pt)
   const left = 45;
-  let y = 745;
+  const pageHeight = 792;
+  const topMargin = 745;
+  const bottomMargin = 65;
+
+  const pagesTextStreams: string[][] = [[]];
+  let currentPageIndex = 0;
+  let y = topMargin;
+
+  const checkPageBreak = (neededHeight: number) => {
+    if (y - neededHeight < bottomMargin) {
+      pagesTextStreams.push([]);
+      currentPageIndex++;
+      y = topMargin;
+      // Add running header on continuation pages
+      const continuationStream = pagesTextStreams[currentPageIndex];
+      continuationStream.push(
+        `BT /F2 8 Tf 0.2 0.2 0.2 rg 1 0 0 1 ${left} ${y} Tm (SOVEREIGN DECREE DOSSIER - PAGE ${currentPageIndex + 1} | REF: ${escapePdfText(input.decreeId)}) Tj ET`
+      );
+      y -= 18;
+      continuationStream.push(`0.5 RG 0.5 w ${left} ${y} m ${612 - left} ${y} l S`);
+      y -= 14;
+    }
+  };
 
   const addText = (
     text: string,
@@ -36,17 +55,17 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
     color = "0 0 0",
     spacing = 14
   ) => {
-    textCommands.push(
-      `BT /${font} ${size} Tf ${color} rg 1 0 0 1 ${left} ${y} Tm (${escapePdfText(
-        text
-      )}) Tj ET`
+    checkPageBreak(spacing);
+    pagesTextStreams[currentPageIndex].push(
+      `BT /${font} ${size} Tf ${color} rg 1 0 0 1 ${left} ${y} Tm (${escapePdfText(text)}) Tj ET`
     );
     y -= spacing;
   };
 
   const addDivider = (thickness = 1, color = "0 0 0") => {
+    checkPageBreak(14);
     y -= 4;
-    textCommands.push(`${color} RG ${thickness} w ${left} ${y} m ${612 - left} ${y} l S`);
+    pagesTextStreams[currentPageIndex].push(`${color} RG ${thickness} w ${left} ${y} m ${612 - left} ${y} l S`);
     y -= 10;
   };
 
@@ -57,7 +76,8 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
 
   // 2. Metadata Block
   addText(`DECREE ID: ${input.decreeId}   |   SEALED: ${input.createdAt}`, "F1", 9, "0.2 0.2 0.2", 14);
-  addText(`PARCEL ID: ${input.deedInfo.parcelId}   |   ZONING: ${input.deedInfo.zoningClassification}`, "F1", 9, "0.2 0.2 0.2", 14);
+  const parcelStatusLabel = input.deedInfo.isVerifiedParcelRecord ? "RECORDED PARCEL" : "UNRECORDED PARCEL";
+  addText(`PARCEL ID: ${input.deedInfo.parcelId} (${parcelStatusLabel})   |   ZONING: ${input.deedInfo.zoningClassification}`, "F1", 9, "0.2 0.2 0.2", 14);
   addText(`PROPERTY ADDRESS: ${input.deedInfo.propertyAddress}`, "F1", 9, "0.2 0.2 0.2", 14);
   addText(`RECORDED OWNER OF RECORD: ${input.deedInfo.ownerName}`, "F2", 9, "0 0 0", 18);
   addDivider(0.5);
@@ -66,7 +86,6 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
   addText("1. CERTIFIED SOVEREIGN COMMUNITY MANDATE", "F2", 11, "0 0 0", 16);
   addText(`Title: ${input.decreeTitle}`, "F2", 10, "0 0 0", 14);
   
-  // Wrap mandate text into multiple lines if needed
   const mandateWords = input.mandateText.split(" ");
   let curLine = "";
   for (const w of mandateWords) {
@@ -143,24 +162,32 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
   addDivider(0.5);
 
   // 7. Commercial Lease Public Nuisance & Indemnification Termination Notice
-  addText("5. STATUTORY NOTICE: PUBLIC NUISANCE & LEASE INDEMNIFICATION TRIGGER", "F2", 11, "0 0 0", 16);
-  const noticeTitle = input.leaseTerminationNotice?.clauseTitle || "Standard Commercial Lease: Public Nuisance & Landowner Indemnification";
-  addText(`Clause: ${noticeTitle}`, "F2", 9, "0 0 0", 13);
-  const noticeBody = input.leaseTerminationNotice?.legalNoticeBody ||
-    "TAKE NOTICE: The verified supermajority community consensus and confirmed municipal setback breaches documented herein constitute a per se Statutory Public Nuisance under applicable state and municipal land-use codes. Landowner is hereby advised that standard commercial ground lease provisions impose strict indemnification and termination remedies for persistent nuisance violations following notice.";
-  
-  const noticeWords = noticeBody.split(" ");
-  let nLine = "";
-  for (const w of noticeWords) {
-    if ((nLine + " " + w).length > 85) {
-      addText(nLine.trim(), "F1", 8, "0.1 0.1 0.1", 11);
-      nLine = w;
-    } else {
-      nLine += " " + w;
+  if (input.leaseTerminationNotice) {
+    addText("5. STATUTORY NOTICE: PUBLIC NUISANCE & LEASE INDEMNIFICATION TRIGGER", "F2", 11, "0 0 0", 16);
+    addText(`Clause: ${input.leaseTerminationNotice.clauseTitle}`, "F2", 9, "0 0 0", 13);
+    const noticeBody = input.leaseTerminationNotice.legalNoticeBody;
+    const noticeWords = noticeBody.split(" ");
+    let nLine = "";
+    for (const w of noticeWords) {
+      if ((nLine + " " + w).length > 85) {
+        addText(nLine.trim(), "F1", 8, "0.1 0.1 0.1", 11);
+        nLine = w;
+      } else {
+        nLine += " " + w;
+      }
     }
-  }
-  if (nLine.trim()) {
-    addText(nLine.trim(), "F1", 8, "0.1 0.1 0.1", 16);
+    if (nLine.trim()) {
+      addText(nLine.trim(), "F1", 8, "0.1 0.1 0.1", 16);
+    }
+  } else {
+    addText("5. STATUTORY NOTICE & LEASE INDEMNIFICATION STATUS", "F2", 11, "0 0 0", 16);
+    addText(
+      "No municipal setback breaches or lease indemnification triggers certified for this parcel at this time.",
+      "F1",
+      8,
+      "0.3 0.3 0.3",
+      16
+    );
   }
 
   addDivider(1);
@@ -169,30 +196,59 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
   const verifyUrl = input.verificationUrl || `https://valerie.sunshade.icu/decree/${input.decreeId}`;
   addText(`Public Audit & Cryptographic Signature Verification: ${verifyUrl}`, "F2", 8, "0 0 0", 12);
 
-  // Assemble Standard PDF Objects
-  const streamContent = textCommands.join("\n");
-  const streamLength = Buffer.byteLength(streamContent, "utf-8");
+  // Assemble Standard Multi-Page PDF
+  const totalPages = pagesTextStreams.length;
+  const header = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+  const offset = Buffer.byteLength(header, "utf-8"); // Fix BUG-0001: exact byte offset
 
-  const objects: string[] = [
-    // 1: Catalog
-    `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj`,
-    // 2: Pages
-    `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj`,
-    // 3: Page
-    `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj`,
-    // 4: Stream
-    `4 0 obj\n<< /Length ${streamLength} >>\nstream\n${streamContent}\nendstream\nendobj`,
-    // 5: Font F1 (Helvetica)
-    `5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj`,
-    // 6: Font F2 (Helvetica-Bold)
-    `6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj`,
-  ];
+  // Object indices:
+  // 1: Catalog
+  // 2: Pages
+  // 3..(2+totalPages): Page objects
+  // (3+totalPages)..(2+totalPages*2): Content Stream objects
+  // (3+totalPages*2): Font F1
+  // (4+totalPages*2): Font F2
+  const fontF1Obj = 3 + totalPages * 2;
+  const fontF2Obj = 4 + totalPages * 2;
+
+  const pageObjNums: number[] = [];
+  const streamObjNums: number[] = [];
+  for (let i = 0; i < totalPages; i++) {
+    pageObjNums.push(3 + i);
+    streamObjNums.push(3 + totalPages + i);
+  }
+
+  const objects: string[] = [];
+
+  // Obj 1: Catalog
+  objects.push(`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj`);
+
+  // Obj 2: Pages
+  const kidsStr = pageObjNums.map((n) => `${n} 0 R`).join(" ");
+  objects.push(`2 0 obj\n<< /Type /Pages /Kids [${kidsStr}] /Count ${totalPages} >>\nendobj`);
+
+  // Page objects & Content Streams
+  for (let i = 0; i < totalPages; i++) {
+    const pageNum = pageObjNums[i];
+    const streamNum = streamObjNums[i];
+    const streamContent = pagesTextStreams[i].join("\n");
+    const streamLen = Buffer.byteLength(streamContent, "utf-8");
+
+    // Page Object
+    objects.push(
+      `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${streamNum} 0 R /Resources << /Font << /F1 ${fontF1Obj} 0 R /F2 ${fontF2Obj} 0 R >> >> >>\nendobj`
+    );
+
+    // Stream Object
+    objects.push(`${streamNum} 0 obj\n<< /Length ${streamLen} >>\nstream\n${streamContent}\nendstream\nendobj`);
+  }
+
+  // Font Objects
+  objects.push(`${fontF1Obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj`);
+  objects.push(`${fontF2Obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj`);
 
   // Build PDF buffer with XRef table
-  let offset = 15; // after "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n"
-  const header = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
   const offsets: number[] = [];
-
   let body = "";
   for (const obj of objects) {
     offsets.push(offset + Buffer.byteLength(body, "utf-8"));

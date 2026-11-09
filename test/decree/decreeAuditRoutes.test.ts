@@ -104,6 +104,36 @@ describe("Public Decree Verification Routes (TASK-VAL-ZONING-RECORD)", () => {
       expect(json.html).toContain("82.4% Supermajority");
       expect(json.merkle_root_hash).toBe(mockDecreeRecord.merkle_root_hash);
     });
+
+    it("escapes malicious HTML characters in decree title and mandate to prevent XSS (SEC_0001)", async () => {
+      const maliciousDecree = {
+        ...mockDecreeRecord,
+        id: "d0000000-0000-0000-0000-000000000002",
+        decree_title: '<script>alert("hacked")</script>',
+        mandate_text: '<img src=x onerror="alert(1)">',
+      };
+
+      // Mock client to return malicious record
+      const { createClient } = await import("@/lib/supabase/server");
+      vi.mocked(createClient).mockImplementationOnce(async () => ({
+        schema: vi.fn().mockReturnThis(),
+        from: vi.fn().mockImplementation((table: string) => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: maliciousDecree, error: null }),
+          }),
+        })),
+      } as any));
+
+      const req = new Request(`https://valerie.sunshade.icu/api/v1/oembed/decree?url=https://valerie.sunshade.icu/decree/${maliciousDecree.id}`);
+      const res = await getOembed(req);
+      const json = await res.json();
+
+      expect(json.html).not.toContain("<script>");
+      expect(json.html).toContain("&lt;script&gt;alert(&quot;hacked&quot;)&lt;/script&gt;");
+      expect(json.html).not.toContain("<img src=x");
+      expect(json.html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    });
   });
 
   describe("Certified Dossier PDF Download Route (/api/decree/[id]/pdf)", () => {

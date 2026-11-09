@@ -47,24 +47,51 @@ export async function compileDecreeDossierData(
     .eq("id", decreeId)
     .single();
 
-  if (decreeErr || !decree) {
+  if (decreeErr) {
+    const msg = decreeErr.message?.toLowerCase() || "";
+    if (
+      decreeErr.code === "PGRST116" ||
+      msg.includes("multiple (or no) rows") ||
+      msg.includes("not found")
+    ) {
+      return null;
+    }
+    throw new Error(`Database error fetching sovereign decree: ${decreeErr.message}`);
+  }
+
+  if (!decree) {
     return null;
   }
 
   // 2. Fetch associated poll
-  const { data: poll } = await target
+  const { data: poll, error: pollErr } = await target
     .from("polls")
     .select("*")
     .eq("id", decree.poll_id)
     .single();
 
+  if (pollErr) {
+    const msg = pollErr.message?.toLowerCase() || "";
+    if (
+      pollErr.code !== "PGRST116" &&
+      !msg.includes("multiple (or no) rows") &&
+      !msg.includes("not found")
+    ) {
+      throw new Error(`Database error fetching associated poll: ${pollErr.message}`);
+    }
+  }
+
   // 3. Fetch associated ad compliance audit if linked
   let auditRecord = null;
-  const { data: audits } = await target
+  const { data: audits, error: auditErr } = await target
     .from("ad_compliance_audits")
     .select("*")
     .eq("decomposed_poll_id", decree.poll_id)
     .limit(1);
+
+  if (auditErr) {
+    throw new Error(`Database error fetching ad compliance audits: ${auditErr.message}`);
+  }
 
   if (Array.isArray(audits) && audits.length > 0) {
     auditRecord = audits[0];
@@ -80,21 +107,27 @@ export async function compileDecreeDossierData(
     ? auditMetadata.hardware_photos
     : [];
 
-  // Parse or default deed info
+  // Parse deed info adhering to Rule 3: Zero fake data. Do not invent parcel facts.
+  const hasVerifiedParcel = Boolean(auditRecord?.parcel_id || auditMetadata.parcel_id);
   const deedInfo = {
-    parcelId: auditRecord?.parcel_id || auditMetadata.parcel_id || `PARCEL-${decree.id.slice(0, 8)}`,
-    ownerName: auditMetadata.owner_name || "Landowner of Record",
-    propertyAddress: auditMetadata.property_address || (poll?.target_locale_code ? `District ${poll.target_locale_code}` : "Designated Deliberation Zone"),
-    zoningClassification: auditMetadata.zoning_classification || "C-2 Commercial Corridor",
+    parcelId: auditRecord?.parcel_id || auditMetadata.parcel_id || "UNRECORDED",
+    ownerName: auditMetadata.owner_name || "Unrecorded",
+    propertyAddress: auditMetadata.property_address || (poll?.target_locale_code ? `District ${poll.target_locale_code}` : "Unspecified"),
+    zoningClassification: auditMetadata.zoning_classification || "Unclassified",
     deedBookPage: auditMetadata.deed_book_page,
     recordingDate: auditMetadata.recording_date,
     boundaryPolygonGeoJson: auditMetadata.boundary_polygon,
+    isVerifiedParcelRecord: hasVerifiedParcel,
   };
 
   const sampleSize = Number(decree.verified_citizen_count) || 0;
   const consensusShare = Number(decree.calibrated_consensus_share) || 0.70;
   // Margin of error calculation based on sample size: 1 / sqrt(N)
   const marginOfError = sampleSize > 0 ? Number((1 / Math.sqrt(sampleSize)).toFixed(4)) : 0.05;
+
+  // Only certify lease nuisance termination notice if confirmed municipal setback breach exists
+  const hasActiveBreach = gisProofs.some((proof) => proof.isBreach === true);
+  const leaseTerminationNotice = hasActiveBreach ? STANDARD_LEASE_NUISANCE_CLAUSE : undefined;
 
   return {
     decreeId: decree.id,
@@ -113,7 +146,7 @@ export async function compileDecreeDossierData(
     },
     gisProofs,
     photos,
-    leaseTerminationNotice: STANDARD_LEASE_NUISANCE_CLAUSE,
+    leaseTerminationNotice,
     verificationUrl: `https://valerie.sunshade.icu/decree/${decree.id}`,
   };
 }

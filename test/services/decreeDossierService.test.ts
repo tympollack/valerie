@@ -144,6 +144,143 @@ describe("Sovereign Citizen Decree Dossier Service (TASK-VAL-DOSSIER-SERVICE)", 
     expect(data?.mrpMetrics.supermajorityScore).toBe(0.81);
     expect(data?.mrpMetrics.sampleSize).toBe(500);
     expect(data?.merkleRootHash).toBe("hash123");
+    // Verifies production data hygiene: unrecorded parcel when audit is absent
+    expect(data?.deedInfo.parcelId).toBe("UNRECORDED");
+    expect(data?.deedInfo.ownerName).toBe("Unrecorded");
+    expect(data?.deedInfo.zoningClassification).toBe("Unclassified");
+    expect(data?.deedInfo.isVerifiedParcelRecord).toBe(false);
+    // Verifies conditional breach notice: no breach proofs -> no termination clause
+    expect(data?.leaseTerminationNotice).toBeUndefined();
+  });
+
+  it("attaches statutory lease termination notice when active breach exists", async () => {
+    const mockSupabase = {
+      schema: vi.fn().mockReturnThis(),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === "sovereign_decrees") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: {
+                id: "dec-breach",
+                poll_id: "poll-breach",
+                decree_title: "Breach Decree",
+                mandate_text: "Mandate",
+                calibrated_consensus_share: 0.85,
+                verified_citizen_count: 600,
+                merkle_root_hash: "hashbreach",
+                created_at: "2026-11-09T00:00:00Z",
+              },
+              error: null,
+            }),
+          };
+        }
+        if (table === "polls") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: { id: "poll-breach", target_locale_code: "US-MA" },
+              error: null,
+            }),
+          };
+        }
+        if (table === "ad_compliance_audits") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockResolvedValue({
+              data: [
+                {
+                  parcel_id: "PARCEL-REAL-99",
+                  metadata: {
+                    owner_name: "Apex Properties Inc",
+                    zoning_classification: "C-1",
+                    gis_proofs: [
+                      {
+                        facilityName: "Civic Playground",
+                        facilityType: "PARK",
+                        bufferRequirementFeet: 500,
+                        measuredDistanceFeet: 120,
+                        violationDistanceFeet: 380,
+                        isBreach: true,
+                      },
+                    ],
+                  },
+                },
+              ],
+              error: null,
+            }),
+          };
+        }
+        return { select: vi.fn().mockReturnThis() };
+      }),
+    } as any;
+
+    const data = await compileDecreeDossierData(mockSupabase, "dec-breach");
+    expect(data).not.toBeNull();
+    expect(data?.deedInfo.parcelId).toBe("PARCEL-REAL-99");
+    expect(data?.deedInfo.isVerifiedParcelRecord).toBe(true);
+    expect(data?.leaseTerminationNotice).toBeDefined();
+    expect(data?.leaseTerminationNotice?.clauseTitle).toContain("Section 14.3");
+  });
+
+  it("throws error disclosing database failures when audits or polls queries fail", async () => {
+    const mockSupabaseAuditFail = {
+      schema: vi.fn().mockReturnThis(),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === "sovereign_decrees") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: { id: "dec-fail", poll_id: "poll-fail" },
+              error: null,
+            }),
+          };
+        }
+        if (table === "polls") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({ data: { id: "poll-fail" }, error: null }),
+          };
+        }
+        if (table === "ad_compliance_audits") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockResolvedValue({ data: null, error: { message: "connection timeout" } }),
+          };
+        }
+        return { select: vi.fn().mockReturnThis() };
+      }),
+    } as any;
+
+    await expect(compileDecreeDossierData(mockSupabaseAuditFail, "dec-fail")).rejects.toThrow(
+      "Database error fetching ad compliance audits: connection timeout"
+    );
+  });
+
+  it("generates valid multi-page PDF documents when evidence exceeds one page", async () => {
+    const longDossierInput: SovereignDecreeDossierInput = {
+      ...mockDossierInput,
+      photos: Array.from({ length: 30 }, (_, i) => ({
+        photoUrl: `https://photos.patchwork.icu/attestation/photo-${i}.jpg`,
+        sha256Hash: `hash-${i.toString().padStart(64, "0")}`,
+        capturedAt: "2026-11-08T22:15:00.000Z",
+        deviceAttestationId: `TPM-DEVICE-${i}`,
+        locationCoordinates: { lat: 42.3601, lng: -71.0589 },
+      })),
+    };
+
+    const result = await generateDecreeDossierService(longDossierInput);
+    const pdfText = Buffer.from(result.pdfBuffer).toString("utf-8");
+
+    expect(pdfText).toContain("/Count 2");
+    expect(pdfText).toContain("SOVEREIGN DECREE DOSSIER - PAGE 2");
+    expect(pdfText).toContain("TPM-DEVICE-29");
   });
 
   it("returns null when decree is not found", async () => {

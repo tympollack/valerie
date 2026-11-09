@@ -104,9 +104,20 @@ export function DecreePublicView({ dossier }: DecreePublicViewProps) {
 
         {/* Parcel Deed Information */}
         <div className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-5 bg-white dark:bg-zinc-950 space-y-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-            Parcel & Zoning Record
-          </h2>
+          <div className="flex justify-between items-center">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              Parcel & Zoning Record
+            </h2>
+            {dossier.deedInfo.isVerifiedParcelRecord ? (
+              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                Verified Parcel Record
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
+                Unrecorded Parcel
+              </span>
+            )}
+          </div>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-zinc-500">Parcel ID:</span>
@@ -157,6 +168,18 @@ export function DecreePublicView({ dossier }: DecreePublicViewProps) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {dossier.leaseTerminationNotice && (
+          <div className="mt-4 p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/40 rounded text-xs text-red-800 dark:text-red-300 space-y-1">
+            <span className="font-bold uppercase tracking-wider block text-[10px] text-red-600 dark:text-red-400">
+              Statutory Notice Triggered
+            </span>
+            <p className="font-semibold">{dossier.leaseTerminationNotice.clauseTitle}</p>
+            <p className="text-red-700 dark:text-red-300 text-[11px] leading-relaxed">
+              {dossier.leaseTerminationNotice.legalNoticeBody}
+            </p>
           </div>
         )}
       </div>

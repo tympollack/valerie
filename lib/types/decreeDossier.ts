@@ -11,6 +11,7 @@ export interface LandownerDeedInfo {
   deedBookPage?: string;
   recordingDate?: string;
   boundaryPolygonGeoJson?: Record<string, unknown>;
+  isVerifiedParcelRecord?: boolean;
 }
 
 export interface GisBufferProof {
