@@ -5,6 +5,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { cellToParent } from "https://esm.sh/h3-js@4.5.0";
 
 const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Origin": "*",
@@ -60,6 +61,38 @@ function sanitizeBrandNames(rawText: string): { sanitized: string; removedBrands
 
   sanitized = sanitized.replace(/(https?:\/\/[^\s]+|www\.[^\s]+|\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b)/gi, "");
   return { sanitized: sanitized.trim(), removedBrands };
+}
+
+function inferCategoriesFromOcr(ocrText: string): string[] {
+  const lower = ocrText.toLowerCase();
+  const categories: string[] = [];
+
+  if (/\b(glare|luminance|bright|night|nits|illumination|blinding|light|flash)\b/i.test(lower)) {
+    categories.push("EXCESSIVE_LUMINANCE");
+  }
+  if (/\b(sightline|vision|blind spot|traffic|merge|intersection|distraction|roadway|highway|hazard)\b/i.test(lower)) {
+    categories.push("TRAFFIC_SIGHTLINE_HAZARD");
+  }
+  if (/\b(school|playground|children|elementary|students?|kindergarten|buffer|daycare)\b/i.test(lower)) {
+    categories.push("SCHOOL_BUFFER_BREACH");
+  }
+  if (/\b(distress|anxiety|existential|overstimulation|mental|sensory|stress)\b/i.test(lower)) {
+    categories.push("UNASSISTED_EXISTENTIAL_DISTRESS");
+  }
+  if (/\b(density|cluster|corridor|equity|overburdened|billboard density|clutter)\b/i.test(lower) || categories.length === 0) {
+    categories.push("CORRIDOR_EQUITY_DISPARITY");
+  }
+
+  return categories;
+}
+
+function resolveRes7FromRes8(h3Index?: string | null): string | null {
+  if (!h3Index) return null;
+  try {
+    return cellToParent(h3Index, 7);
+  } catch {
+    return null;
+  }
 }
 
 async function auditAdQuestionBias(
@@ -185,7 +218,22 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Missing Supabase service environment variables" }, 500);
     }
 
+    // Security: Authenticate caller token (service_role or authenticated user)
+    const authHeader = req.headers.get("Authorization") || "";
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    if (!token) {
+      return jsonResponse({ error: "Missing required authorization bearer token" }, 401);
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const isServiceRole = token === supabaseServiceKey;
+
+    if (!isServiceRole) {
+      const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
+      if (userErr || !user) {
+        return jsonResponse({ error: "Unauthorized: Invalid or expired caller token" }, 401);
+      }
+    }
 
     let auditId: string | null = null;
     let ocrRawText = "";
@@ -207,7 +255,7 @@ Deno.serve(async (req: Request) => {
       auditId = url.searchParams.get("audit_id");
     }
 
-    // If auditId provided, fetch source audit record
+    // If auditId provided, fetch and validate source audit record
     if (auditId) {
       const { data: audit, error: auditErr } = await supabase
         .schema("valerie")
@@ -218,6 +266,29 @@ Deno.serve(async (req: Request) => {
 
       if (auditErr || !audit) {
         return jsonResponse({ error: `Ad audit record '${auditId}' not found` }, 404);
+      }
+
+      if (audit.status === "DISMISSED") {
+        return jsonResponse({ error: `Cannot decompose a dismissed audit '${auditId}'` }, 400);
+      }
+
+      // Guard against repeated calls creating orphaned polls
+      if (audit.decomposed_poll_id) {
+        const { data: existingPoll } = await supabase
+          .schema("valerie")
+          .from("polls")
+          .select("id, question_text, scope_tier, h3_res7, target_locale_code, created_at")
+          .eq("id", audit.decomposed_poll_id)
+          .single();
+
+        if (existingPoll) {
+          return jsonResponse({
+            success: true,
+            poll: existingPoll,
+            message: "Audit is already linked to active decomposed poll",
+            status: audit.status,
+          });
+        }
       }
 
       ocrRawText = audit.ocr_raw_text || ocrRawText;
@@ -232,6 +303,11 @@ Deno.serve(async (req: Request) => {
         { error: "Provide either audit_id or ocr_raw_text and flagged_categories" },
         400
       );
+    }
+
+    // Infer categories from OCR copy if not explicitly provided
+    if (flaggedCategories.length === 0 && ocrRawText) {
+      flaggedCategories = inferCategoriesFromOcr(ocrRawText);
     }
 
     // Run dual-agent pipeline
@@ -257,10 +333,21 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    if (!chosenQuestion) {
-      chosenQuestion = synthesizeCivicProposition(sanitized, flaggedCategories, 1);
-      bestScore = 0.05;
+    // Reject non-neutral questions (cutoff: < 0.15)
+    if (bestScore >= 0.15 || !chosenQuestion) {
+      return jsonResponse(
+        {
+          success: false,
+          error: "Candidate questions failed Cynic neutrality audit (bias >= 0.15)",
+          cynic_bias_score: bestScore,
+          attempts,
+        },
+        422
+      );
     }
+
+    // Derive voter-eligible resolution-7 cell from resolution-8 index
+    const h3Res7 = resolveRes7FromRes8(h3IndexRes8);
 
     // Insert new poll into valerie.polls
     const { data: newPoll, error: pollErr } = await supabase
@@ -269,6 +356,7 @@ Deno.serve(async (req: Request) => {
       .insert({
         question_text: chosenQuestion,
         scope_tier: "LOCAL",
+        h3_res7: h3Res7,
         target_locale_code: h3IndexRes8 ? `h3:${h3IndexRes8}` : null,
         is_active: true,
         material_domain: "CIVIC_INFRASTRUCTURE",
@@ -280,7 +368,7 @@ Deno.serve(async (req: Request) => {
           flagged_categories: flaggedCategories,
         },
       })
-      .select("id, question_text, scope_tier, created_at")
+      .select("id, question_text, scope_tier, h3_res7, target_locale_code, created_at")
       .single();
 
     if (pollErr || !newPoll) {
@@ -289,7 +377,7 @@ Deno.serve(async (req: Request) => {
 
     // If an audit record was targeted, link the decomposed poll and advance status
     if (auditId) {
-      await supabase
+      const { error: updateErr } = await supabase
         .schema("valerie")
         .from("ad_compliance_audits")
         .update({
@@ -298,6 +386,15 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", auditId);
+
+      if (updateErr) {
+        // Rollback inserted poll to prevent orphaned active records
+        await supabase.schema("valerie").from("polls").delete().eq("id", newPoll.id);
+        return jsonResponse(
+          { error: `Failed to link decomposed poll to audit record: ${updateErr.message}` },
+          500
+        );
+      }
     }
 
     return jsonResponse({

@@ -9,6 +9,7 @@
  *     or commercial vendettas. Forces rewrite if cynic_bias_score >= 0.15.
  */
 
+import { cellToParent } from "h3-js";
 import { AdViolationCategory } from "../valerie/adCompliance";
 
 export interface AdDecomposerInput {
@@ -32,6 +33,7 @@ export interface DecomposedPollResult {
   passed: boolean;
   violationFocus: AdViolationCategory[];
   scopeTier: "LOCAL";
+  h3_res7?: string | null;
 }
 
 // Brand patterns to strip from raw billboard OCR
@@ -61,6 +63,44 @@ const BIASED_TERMS = [
 ];
 
 /**
+ * Resolves H3 resolution-7 parent from an H3 resolution-8 index to ensure voter matching.
+ */
+export function resolveRes7FromRes8(h3Index?: string | null): string | null {
+  if (!h3Index) return null;
+  try {
+    return cellToParent(h3Index, 7);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Infer violation categories from OCR text when flagged_categories is empty.
+ */
+export function inferCategoriesFromOcr(ocrText: string): AdViolationCategory[] {
+  const lower = ocrText.toLowerCase();
+  const categories: AdViolationCategory[] = [];
+
+  if (/\b(glare|luminance|bright|night|nits|illumination|blinding|light|flash)\b/i.test(lower)) {
+    categories.push("EXCESSIVE_LUMINANCE");
+  }
+  if (/\b(sightline|vision|blind spot|traffic|merge|intersection|distraction|roadway|highway|hazard)\b/i.test(lower)) {
+    categories.push("TRAFFIC_SIGHTLINE_HAZARD");
+  }
+  if (/\b(school|playground|children|elementary|students?|kindergarten|buffer|daycare)\b/i.test(lower)) {
+    categories.push("SCHOOL_BUFFER_BREACH");
+  }
+  if (/\b(distress|anxiety|existential|overstimulation|mental|sensory|stress)\b/i.test(lower)) {
+    categories.push("UNASSISTED_EXISTENTIAL_DISTRESS");
+  }
+  if (/\b(density|cluster|corridor|equity|overburdened|billboard density|clutter)\b/i.test(lower) || categories.length === 0) {
+    categories.push("CORRIDOR_EQUITY_DISPARITY");
+  }
+
+  return categories;
+}
+
+/**
  * Strips brand names and corporate identifiers from raw billboard text.
  */
 export function sanitizeBrandNames(rawText: string): { sanitized: string; removedBrands: string[] } {
@@ -79,9 +119,7 @@ export function sanitizeBrandNames(rawText: string): { sanitized: string; remove
     }
   }
 
-  // Remove generic URLs or phone numbers that might identify sponsors
   sanitized = sanitized.replace(/(https?:\/\/[^\s]+|www\.[^\s]+|\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b)/gi, "");
-
   return { sanitized: sanitized.trim(), removedBrands };
 }
 
@@ -94,7 +132,6 @@ export async function auditAdQuestionBias(
   questionText: string,
   openaiApiKey?: string
 ): Promise<CynicAuditResult> {
-  // If OpenAI key is supplied, attempt LLM audit
   if (openaiApiKey) {
     try {
       const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -133,13 +170,12 @@ export async function auditAdQuestionBias(
         }
       }
     } catch {
-      // Fall through to heuristic audit
+      // Fall through to heuristic
     }
   }
 
-  // Fallback heuristic Cynic audit
   const lower = questionText.toLowerCase();
-  let biasScore = 0.04; // baseline neutral score
+  let biasScore = 0.04;
 
   for (const pattern of KNOWN_BRAND_PATTERNS) {
     const match = lower.match(pattern);
@@ -173,7 +209,7 @@ export async function auditAdQuestionBias(
  * Generates an objective civic proposition addressing the root zoning/environmental issue.
  */
 export function synthesizeCivicProposition(
-  sanitizedCopy: string,
+  _sanitizedCopy: string,
   categories: AdViolationCategory[],
   attempt: number
 ): string {
@@ -216,13 +252,19 @@ export async function runAdDecomposerPipeline(
   openaiApiKey?: string
 ): Promise<DecomposedPollResult> {
   const { sanitized } = sanitizeBrandNames(input.ocrRawText);
+  const effectiveCategories =
+    input.flaggedCategories && input.flaggedCategories.length > 0
+      ? input.flaggedCategories
+      : inferCategoriesFromOcr(input.ocrRawText);
+
   let attempts = 0;
   let bestQuestion = "";
   let lowestBias = 1.0;
+  const h3Res7 = resolveRes7FromRes8(input.h3IndexRes8);
 
   while (attempts < 3) {
     attempts++;
-    const candidate = synthesizeCivicProposition(sanitized, input.flaggedCategories, attempts);
+    const candidate = synthesizeCivicProposition(sanitized, effectiveCategories, attempts);
     const audit = await auditAdQuestionBias(candidate, openaiApiKey);
 
     if (audit.cynic_bias_score < lowestBias) {
@@ -236,19 +278,21 @@ export async function runAdDecomposerPipeline(
         cynic_bias_score: audit.cynic_bias_score,
         attempts,
         passed: true,
-        violationFocus: input.flaggedCategories,
+        violationFocus: effectiveCategories,
         scopeTier: "LOCAL",
+        h3_res7: h3Res7,
       };
     }
   }
 
-  // Guaranteed fallback passing question if attempts exceeded
+  // If even after max attempts question fails neutrality cutoff (0.15), return passed: false
   return {
-    question: bestQuestion || synthesizeCivicProposition(sanitized, input.flaggedCategories, 1),
-    cynic_bias_score: Math.min(lowestBias, 0.12),
+    question: bestQuestion,
+    cynic_bias_score: lowestBias,
     attempts,
-    passed: true,
-    violationFocus: input.flaggedCategories,
+    passed: lowestBias < 0.15,
+    violationFocus: effectiveCategories,
     scopeTier: "LOCAL",
+    h3_res7: h3Res7,
   };
 }
