@@ -9,6 +9,7 @@
 
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { t, formatDate } from "@/lib/i18n";
 
 export const dynamic = "force-dynamic";
 
@@ -81,8 +82,15 @@ export async function GET(request: Request) {
     const shortHash = decree.merkle_root_hash ? `${decree.merkle_root_hash.slice(0, 10)}...${decree.merkle_root_hash.slice(-8)}` : "TAMPER-SEALED";
     const canonicalDecreeUrl = `https://valerie.sunshade.icu/decree/${encodeURIComponent(decree.id)}`;
 
+    const brandTag = escapeHtml(t("common.branding.sovereignDecree"));
+    const verifyLinkText = escapeHtml(t("decree.oembed.verifyAuditSignatures"));
+    const consensusBadgeText = escapeHtml(t("decree.oembed.consensusBadge", { percent: consensusPercent }));
+    const citizenCountText = escapeHtml(t("decree.oembed.verifiedCitizens", { count: citizenCount }));
+    const statusText = escapeHtml(t("decree.oembed.statusLabel", { status: safeStatus }));
+    const sealedText = escapeHtml(t("decree.oembed.sealedDate", { date: formatDate(decree.created_at) }));
+
     // Standard high-contrast responsive embed HTML badge with sanitized values (SEC_0001)
-    const badgeHtml = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;border:2px solid #000;padding:16px;background:#fff;color:#000;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.1);"><div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e0e0e0;padding-bottom:8px;margin-bottom:12px;"><span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#444;">Project Valerie · Sovereign Citizen Decree</span><span style="font-size:10px;font-family:monospace;background:#f0f0f0;padding:2px 6px;border-radius:4px;border:1px solid #ccc;">ROOT: ${escapeHtml(shortHash)}</span></div><h3 style="margin:0 0 8px;font-size:16px;font-weight:700;line-height:1.3;">${safeTitle}</h3><p style="margin:0 0 12px;font-size:13px;color:#333;line-height:1.4;">${safeMandate}</p><div style="display:flex;gap:16px;font-size:12px;font-weight:600;background:#f9f9f9;padding:8px 12px;border-radius:4px;margin-bottom:12px;"><span>Consensus: <strong style="color:#000;">${consensusPercent}% Supermajority</strong></span><span>Verified Citizens: <strong style="color:#000;">${citizenCount}</strong></span><span>Status: <strong style="color:#000;">${safeStatus}</strong></span></div><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;"><a href="${canonicalDecreeUrl}" target="_blank" rel="noopener noreferrer" style="color:#000;font-weight:700;text-decoration:underline;">Verify Audit Signatures & Download Dossier &rarr;</a><span style="color:#666;">Sealed: ${new Date(decree.created_at).toLocaleDateString()}</span></div></div>`;
+    const badgeHtml = `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:600px;border:2px solid #000;padding:16px;background:#fff;color:#000;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.1);"><div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e0e0e0;padding-bottom:8px;margin-bottom:12px;"><span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#444;">${brandTag}</span><span style="font-size:10px;font-family:monospace;background:#f0f0f0;padding:2px 6px;border-radius:4px;border:1px solid #ccc;">ROOT: ${escapeHtml(shortHash)}</span></div><h3 style="margin:0 0 8px;font-size:16px;font-weight:700;line-height:1.3;">${safeTitle}</h3><p style="margin:0 0 12px;font-size:13px;color:#333;line-height:1.4;">${safeMandate}</p><div style="display:flex;gap:16px;font-size:12px;font-weight:600;background:#f9f9f9;padding:8px 12px;border-radius:4px;margin-bottom:12px;"><span>Consensus: <strong style="color:#000;">${consensusBadgeText}</strong></span><span><strong style="color:#000;">${citizenCountText}</strong></span><span><strong style="color:#000;">${statusText}</strong></span></div><div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;"><a href="${canonicalDecreeUrl}" target="_blank" rel="noopener noreferrer" style="color:#000;font-weight:700;text-decoration:underline;">${verifyLinkText}</a><span style="color:#666;">${sealedText}</span></div></div>`;
 
     return NextResponse.json(
       {
@@ -91,7 +99,7 @@ export async function GET(request: Request) {
         provider_name: "Project Valerie",
         provider_url: "https://valerie.sunshade.icu",
         title: `Sovereign Citizen Decree: ${decree.decree_title}`,
-        author_name: "Verified Citizen Deliberation Assembly",
+        author_name: t("common.branding.votaryAssembly"),
         author_url: canonicalDecreeUrl,
         width: 600,
         height: 240,

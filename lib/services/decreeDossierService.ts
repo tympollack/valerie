@@ -15,17 +15,22 @@ import {
   HardwarePhotoAttestation,
 } from "../types/decreeDossier";
 import { generateDecreePdf } from "./decreePdfGenerator";
+import { t } from "../i18n";
 
 /**
- * Standard commercial lease Public Nuisance & Indemnification termination clause text.
+ * Standard commercial lease Public Nuisance & Indemnification termination clause factory.
+ * Localized via lib/i18n.
  */
-export const STANDARD_LEASE_NUISANCE_CLAUSE = {
-  clauseTitle: "Commercial Lease Section 14.3: Public Nuisance, Hazardous Use & Indemnification",
-  statutoryCovenant: "Uniform Municipal Land Use Covenant § 18-A",
-  curePeriodDays: 30,
-  legalNoticeBody:
-    "TAKE FORMAL NOTICE: The verified supermajority community consensus and confirmed municipal setback breaches certified herein establish a per se statutory public nuisance. Under Section 14.3 of standard commercial real property lease agreements, Landowner and Tenant are jointly and severally subject to mandatory nuisance abatement, immediate indemnification obligations, and lease termination remedies upon expiration of the 30-day statutory cure period.",
-};
+export function getStandardLeaseNuisanceClause(locale = "en-US") {
+  return {
+    clauseTitle: t("legal.commercialLeaseNuisance.clauseTitle", undefined, locale),
+    statutoryCovenant: t("legal.commercialLeaseNuisance.statutoryCovenant", undefined, locale),
+    curePeriodDays: 30,
+    legalNoticeBody: t("legal.commercialLeaseNuisance.legalNoticeBody", undefined, locale),
+  };
+}
+
+export const STANDARD_LEASE_NUISANCE_CLAUSE = getStandardLeaseNuisanceClause();
 
 /**
  * Loads raw decree, poll, and ad audit records and synthesizes a certified dossier input object.
