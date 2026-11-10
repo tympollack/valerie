@@ -1,0 +1,25 @@
+{
+  "actions": {
+    "downloadPdf": "Download Certified Legal Dossier (PDF)",
+    "downloading": "Downloading...",
+    "copyEmbed": "Copy Newsroom Embed",
+    "copiedEmbed": "Embed Snippet Copied",
+    "retry": "Retry",
+    "close": "Close"
+  },
+  "status": {
+    "verified": "Verified",
+    "unverified": "Unverified",
+    "unrecorded": "Unrecorded",
+    "unclassified": "Unclassified",
+    "unspecified": "Unspecified",
+    "sealed": "Sealed",
+    "deliberating": "Deliberating",
+    "resolved": "Resolved",
+    "dismissed": "Dismissed"
+  },
+  "branding": {
+    "sovereignDecree": "Project Valerie · Sovereign Citizen Decree",
+    "votaryAssembly": "Verified Citizen Deliberation Assembly"
+  }
+}
