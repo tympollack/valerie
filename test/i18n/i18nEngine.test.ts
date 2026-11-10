@@ -1,7 +1,43 @@
 import { describe, it, expect } from "vitest";
-import { t, formatNumber, formatPercent, formatDate } from "@/lib/i18n";
+import { t, formatNumber, formatPercent, formatDate, TranslationKey } from "@/lib/i18n";
 
 describe("Type-Safe i18n Engine (TASK-VAL-I18N-CORE)", () => {
+  describe("Compile-Time Key Verification", () => {
+    it("enforces that intermediate object paths and non-string leaves are excluded", () => {
+      // Compile-time type tests: intermediate object branches MUST be excluded from TranslationKey
+      type IsDecreePdfExcluded = "decree.pdf" extends TranslationKey ? true : false;
+      const _test1: IsDecreePdfExcluded = false;
+
+      type IsDecreeExcluded = "decree" extends TranslationKey ? true : false;
+      const _test2: IsDecreeExcluded = false;
+
+      // Non-string leaves (e.g. numeric curePeriodDays) MUST be excluded from TranslationKey
+      type IsNumericLeafExcluded = "legal.commercialLeaseNuisance.curePeriodDays" extends TranslationKey
+        ? true
+        : false;
+      const _test3: IsNumericLeafExcluded = false;
+
+      // Valid string leaf paths MUST be included in TranslationKey
+      type IsValidLeafIncluded = "decree.pdf.documentHeader" extends TranslationKey ? true : false;
+      const _test4: IsValidLeafIncluded = true;
+
+      expect(_test1).toBe(false);
+      expect(_test2).toBe(false);
+      expect(_test3).toBe(false);
+      expect(_test4).toBe(true);
+
+      // Verify @ts-expect-error rejects branch keys and non-string leaves
+      // @ts-expect-error - "decree.pdf" is an object branch, not a leaf string
+      t("decree.pdf");
+
+      // @ts-expect-error - "legal.commercialLeaseNuisance.curePeriodDays" is a number, not a string
+      t("legal.commercialLeaseNuisance.curePeriodDays");
+
+      // @ts-expect-error - "decree" is an object branch
+      t("decree");
+    });
+  });
+
   it("resolves nested translation keys accurately from English dictionary", () => {
     const header = t("decree.pdf.documentHeader");
     expect(header).toBe("SOVEREIGN CITIZEN DECREE & LEGAL LANDOWNER DOSSIER");

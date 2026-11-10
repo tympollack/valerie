@@ -8,7 +8,7 @@ export type LocaleCode = "en" | "en-US" | "es" | "es-US";
 
 type Join<K, P> = K extends string | number
   ? P extends string | number
-    ? `${K}${"" extends P ? "" : "."}${P}`
+    ? `${K}.${P}`
     : never
   : never;
 
@@ -19,9 +19,15 @@ export type NestedKeyOf<T, D extends number = 4> = [D] extends [never]
   : T extends object
   ? {
       [K in keyof T]-?: K extends string | number
-        ? `${K}` | Join<K, NestedKeyOf<T[K], Prev[D]>>
+        ? T[K] extends string
+          ? `${K}`
+          : T[K] extends readonly unknown[]
+          ? never
+          : T[K] extends object
+          ? Join<K, NestedKeyOf<T[K], Prev[D]>>
+          : never
         : never;
     }[keyof T]
-  : "";
+  : never;
 
 export type TranslationParams = Record<string, string | number | boolean>;
