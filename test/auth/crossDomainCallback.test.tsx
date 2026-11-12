@@ -151,6 +151,20 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(sanitizeReturnTo("/poll/123")).toBe("/poll/123")
       expect(sanitizeReturnTo("")).toBe("/deliberation")
     })
+
+    it("strips plaintext access_token and refresh_token from return_to hash fragments to avoid credential leakage", () => {
+      expect(
+        sanitizeReturnTo("/settings#access_token=eyJhbGciOiJFUzI1NiIsImtpZCI6IjA1...&refresh_token=secret&token_type=bearer")
+      ).toBe("/settings")
+
+      expect(
+        sanitizeReturnTo("https://votary.app/settings#access_token=eyJhbGciOiJFUzI1NiIsImtpZCI6IjA1...")
+      ).toBe("/settings")
+
+      // Preserves harmless UI anchor hashes
+      expect(sanitizeReturnTo("/settings#profile")).toBe("/settings#profile")
+      expect(sanitizeReturnTo("https://votary.app/settings#account")).toBe("/settings#account")
+    })
   })
 
   describe("verifyAntiSybilClaim", () => {
