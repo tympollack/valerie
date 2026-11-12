@@ -96,17 +96,18 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
 
         let isVerified = false
         if (user) {
+          const freshProof = extractVerificationProof(user)
+
           try {
             const { data: rpcRes, error: rpcErr } = await supabase.rpc(
               "is_human_verified",
               { p_user_id: user.id }
             )
             if (!rpcErr && typeof rpcRes === "boolean") {
-              isVerified = rpcRes
+              isVerified = rpcRes && freshProof.trustState === "active"
             }
           } catch {}
 
-          const freshProof = extractVerificationProof(user)
           if (freshProof.isHuman && freshProof.trustState === "active") {
             isVerified = true
           }
@@ -376,7 +377,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
                 {userContext.isHumanVerified ? (
                   <>
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Single-Human Verified</span>
+                    <span>Identity Confirmed</span>
                   </>
                 ) : (
                   <>
@@ -405,8 +406,8 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
                     <span className="font-semibold text-emerald-300">
                       Voting Rights Active:
                     </span>{" "}
-                    Your account has passed single-human proof. You are eligible
-                    to commit sealed bivariate votes.
+                    Your account is confirmed. You are eligible to submit
+                    community ballots.
                   </div>
                 </>
               ) : (

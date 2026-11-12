@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/components/auth/AuthProvider"
+import { getCurrentUserContext } from "@/app/actions/auth"
 import { cn } from "@/lib/utils"
 import { siteConfig } from "@/config/site"
 
@@ -68,11 +69,16 @@ export const metadata: Metadata = {
   },
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  let userContext = undefined
+  try {
+    userContext = await getCurrentUserContext()
+  } catch {}
+
   return (
     <html
       lang="en"
@@ -81,7 +87,7 @@ export default function RootLayout({
     >
       <body>
         <ThemeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider initialUserContext={userContext}>{children}</AuthProvider>
         </ThemeProvider>
       </body>
     </html>
