@@ -99,6 +99,7 @@ if (!skipEdge) {
     { name: "assemble-digest", flags: [] },
     { name: "valerie-decree-cron", flags: ["--no-verify-jwt"] },
     { name: "valerie-reveal-notifier", flags: ["--no-verify-jwt"] },
+    { name: "valerie-ad-decomposer", flags: [] },
   ];
 
   for (const fn of edgeFunctions) {
