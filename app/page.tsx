@@ -170,6 +170,7 @@ export default async function Page() {
               targetLocaleCode={activePoll.target_locale_code ?? undefined}
               historicalZScore={historicalZScore}
               historicalBaseline={historicalBaseline}
+              userContext={userContext}
             />
           ) : isDistrictCompleted ? (
             <ChapterEndCard

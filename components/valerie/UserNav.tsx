@@ -22,9 +22,9 @@ import {
   AlertTriangle,
   Loader2,
 } from "lucide-react"
-import { type UserContext, signOutAction } from "@/app/actions/auth"
+import { type UserContext, signOutAction, revalidateUserContextAction } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/client"
-import { extractAntiSybilProof } from "@/lib/auth/ssoHandshake"
+import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
 
 interface UserNavProps {
@@ -67,6 +67,69 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
     }
   }, [])
 
+  // Sync verification status on tab focus or visibilitychange when returning from SunShade Hub
+  useEffect(() => {
+    const handleSync = async () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return
+      if (!userContext.authenticated || userContext.isHumanVerified) return
+
+      try {
+        const supabase = createClient()
+        await supabase.auth.refreshSession()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+
+        let isVerified = false
+        if (user) {
+          try {
+            const { data: rpcRes, error: rpcErr } = await supabase.rpc(
+              "is_human_verified",
+              { p_user_id: user.id }
+            )
+            if (!rpcErr && typeof rpcRes === "boolean") {
+              isVerified = rpcRes
+            }
+          } catch {}
+
+          const freshProof = extractVerificationProof(user)
+          if (freshProof.isHuman && freshProof.trustState === "active") {
+            isVerified = true
+          }
+        }
+
+        try {
+          const serverContext = await revalidateUserContextAction()
+          if (serverContext.isHumanVerified) {
+            isVerified = true
+          }
+        } catch {}
+
+        if (isVerified) {
+          setUserContext((prev) => ({
+            ...prev,
+            isHumanVerified: true,
+          }))
+          router.refresh()
+        }
+      } catch (err) {
+        console.warn("Failed to sync verification state:", err)
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", handleSync)
+      document.addEventListener("visibilitychange", handleSync)
+    }
+
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", handleSync)
+        document.removeEventListener("visibilitychange", handleSync)
+      }
+    }
+  }, [userContext.authenticated, userContext.isHumanVerified, router])
+
   // Listen to client-side auth state changes for real-time reactivity
   useEffect(() => {
     try {
@@ -91,7 +154,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             trustState: "active",
           })
         } else if (session?.user) {
-          const freshProof = extractAntiSybilProof(session.user)
+          const freshProof = extractVerificationProof(session.user)
           const isHumanVerified = freshProof.isHuman && freshProof.trustState === "active"
           const email = session.user.email || null
           const displayName =
@@ -165,8 +228,13 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/")}`
       : "/auth/callback"
 
+  const currentUrl =
+    typeof window !== "undefined"
+      ? window.location.href
+      : returnToUrl || "/"
+
   const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
-  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`
+  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true&redirectTo=${encodeURIComponent(currentUrl)}`
 
   // 1. Unauthenticated State
   if (!userContext.authenticated) {
@@ -218,8 +286,8 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
               )}
               title={
                 userContext.isHumanVerified
-                  ? "Single-Human Identity Verified"
-                  : "Single-Human Verification Required"
+                  ? "Identity Confirmed"
+                  : "Setup Needed"
               }
             />
           </div>
@@ -239,7 +307,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
                   : "text-amber-400"
               )}
             >
-              {userContext.isHumanVerified ? "Verified Human" : "Unverified"}
+              {userContext.isHumanVerified ? "Verified Human" : "Setup Needed"}
             </span>
           </div>
         </PopoverTrigger>
@@ -251,7 +319,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
           className="w-80 overflow-hidden rounded-xl border border-cyan-500/30 bg-slate-950/95 p-0 text-slate-100 shadow-[0_0_35px_rgba(6,182,212,0.2)] backdrop-blur-xl"
         >
           {/* Popover Header */}
-          <div className="space-y-2 border-b border-slate-800 bg-cyan-950/40 p-4">
+          <div className="space-y-3 border-b border-slate-800 bg-cyan-950/40 p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-teal-500 text-sm font-bold text-slate-950">
@@ -273,7 +341,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
               <Badge
                 variant="outline"
                 className={cn(
-                  "gap-1 px-2 py-0.5 font-mono text-[10px] font-semibold",
+                  "gap-1 px-2.5 py-1 font-mono text-[11px] font-semibold",
                   userContext.isHumanVerified
                     ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-300"
                     : "border-amber-500/40 bg-amber-950/40 text-amber-300"
@@ -281,37 +349,33 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
               >
                 {userContext.isHumanVerified ? (
                   <>
-                    <ShieldCheck className="h-3 w-3 text-emerald-400" />
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
                     <span>Single-Human Verified</span>
                   </>
                 ) : (
                   <>
-                    <ShieldAlert className="h-3 w-3 text-amber-400" />
-                    <span>Unverified Identity</span>
+                    <ShieldAlert className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Voter Status: Unconfirmed</span>
                   </>
                 )}
               </Badge>
-
-              <span className="font-mono text-[10px] text-slate-500 uppercase">
-                Tier: {userContext.verificationTier}
-              </span>
             </div>
           </div>
 
-          {/* Anti-Sybil Notice */}
+          {/* Verification Notice Card */}
           <div className="space-y-3 p-4 text-xs">
             <div
               className={cn(
-                "flex items-start gap-2 rounded-lg border p-2.5",
+                "flex items-start gap-2.5 rounded-lg border p-3",
                 userContext.isHumanVerified
-                  ? "border-emerald-500/20 bg-emerald-950/20 text-emerald-200"
-                  : "border-amber-500/20 bg-amber-950/20 text-amber-200"
+                  ? "border-emerald-500/20 bg-emerald-950/20 text-slate-100"
+                  : "border-amber-500/40 bg-amber-950/20 text-slate-100"
               )}
             >
               {userContext.isHumanVerified ? (
                 <>
                   <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                  <div className="text-[11px] leading-relaxed">
+                  <div className="text-[11px] leading-relaxed text-slate-100">
                     <span className="font-semibold text-emerald-300">
                       Voting Rights Active:
                     </span>{" "}
@@ -322,13 +386,12 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
               ) : (
                 <>
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-                  <div className="text-[11px] leading-relaxed">
+                  <div className="text-[11px] leading-relaxed text-slate-100">
                     <span className="font-semibold text-amber-300">
-                      Verification Required:
+                      Confirm Your Account to Vote:
                     </span>{" "}
-                    Your Hub account has not completed Anti-Sybil proof.
-                    Single-human verification is required before committing
-                    votes.
+                    To ensure one person equals one vote and keep bots out,
+                    please confirm your identity on your SunShade Hub profile.
                   </div>
                 </>
               )}
@@ -340,10 +403,10 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
                 href={verifyUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/15 px-3 py-2 text-xs font-semibold text-amber-300 transition-colors hover:bg-amber-500/25"
+                className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 px-3 py-2 text-xs font-semibold text-slate-950 shadow-md transition-colors focus-visible:ring-2 focus-visible:ring-amber-300 focus:outline-none"
               >
-                <span>Complete Verification on Hub</span>
-                <ExternalLink className="h-3.5 w-3.5" />
+                <span>Confirm Identity on Hub</span>
+                <ExternalLink className="h-3.5 w-3.5 text-slate-950" />
               </a>
             )}
 
@@ -403,3 +466,5 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
     </div>
   )
 }
+
+export { UserNav as UserMenu }

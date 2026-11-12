@@ -136,6 +136,7 @@ export default async function PollPage({
               historicalZScore={historicalZScore}
               historicalBaseline={historicalBaseline}
               initialVote={userVote}
+              userContext={userContext}
             />
           ) : (
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-slate-400 backdrop-blur-md">

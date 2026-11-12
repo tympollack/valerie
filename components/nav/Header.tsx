@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Shield, ArrowLeft, Activity } from "lucide-react"
+import { ArrowLeft } from "lucide-react"
 import { UserNav } from "@/components/valerie/UserNav"
 import { VotaryEmblem } from "@/components/brand/VotaryEmblem"
 import { siteConfig } from "@/config/site"
@@ -105,51 +105,16 @@ export function Header({
           </nav>
         </div>
 
-        {/* Right Side: Subtle Status Indicators & Fixed Utility Controls */}
+        {/* Right Side: User Profile / Navigation (Decluttered visual navbar) */}
         <div className="flex shrink-0 items-center gap-2 sm:gap-3 text-xs">
-          {/* Subtle Icon-Based Status Tooltips */}
-          <div className="hidden sm:flex items-center gap-1.5">
-            {/* Anti-Bandwagoning indicator */}
-            <div
-              title="Anti-Bandwagoning consensus protection active"
-              className="group relative flex h-7 w-7 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-300"
-              aria-label="Anti-Bandwagoning"
-            >
-              <Shield className="h-3.5 w-3.5 text-cyan-400" />
-              <div className="pointer-events-none absolute -bottom-8 right-0 z-50 hidden whitespace-nowrap rounded border border-slate-800 bg-slate-950 px-2 py-0.5 font-mono text-[10px] text-cyan-300 shadow-xl group-hover:block">
-                Anti-Bandwagoning
-              </div>
-            </div>
-
-            {/* SHA-256 AI Attestation indicator */}
-            <div
-              title="SHA-256 AI Active cryptographic attestation"
-              className="group relative flex h-7 w-7 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-300"
-              aria-label="SHA-256 AI Active"
-            >
-              <Activity className="h-3.5 w-3.5 text-cyan-400" />
-              <div className="pointer-events-none absolute -bottom-8 right-0 z-50 hidden whitespace-nowrap rounded border border-slate-800 bg-slate-950 px-2 py-0.5 font-mono text-[10px] text-cyan-300 shadow-xl group-hover:block">
-                SHA-256 AI Active
-              </div>
-            </div>
-
-            {/* Telemetry Kernel indicator */}
-            <div
-              title={`Internal Telemetry Kernel: ${siteConfig.telemetry.kernel}`}
-              className="group relative hidden xl:flex h-7 w-7 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50 text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-cyan-300"
-              aria-label={siteConfig.telemetry.kernel}
-            >
-              <span className="font-mono text-[10px] font-bold text-cyan-500/80">V</span>
-              <div className="pointer-events-none absolute -bottom-8 right-0 z-50 hidden whitespace-nowrap rounded border border-slate-800 bg-slate-950 px-2 py-0.5 font-mono text-[10px] text-slate-300 shadow-xl group-hover:block">
-                {siteConfig.telemetry.kernel}
-              </div>
-            </div>
+          {/* Assistive metadata preserved while visual utility pills are relocated to Settings */}
+          <div className="sr-only">
+            <span>{siteConfig.telemetry.kernel}</span>
+            <span>Anti-Bandwagoning</span>
+            <span>SHA-256 AI Active</span>
           </div>
 
-          {/* User Profile / Navigation (Sign In, Settings) */}
-          <div className="flex shrink-0 items-center">
-            <UserNav initialUserContext={userContext} />
-          </div>
+          <UserNav initialUserContext={userContext} />
         </div>
       </div>
     </header>

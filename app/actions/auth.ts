@@ -59,6 +59,21 @@ export async function getCurrentUserContext(): Promise<UserContext> {
 
       if (resolvedUser) {
         const proof = extractAntiSybilProof(resolvedUser)
+        let isHumanVerified = proof.isHuman && proof.trustState === "active"
+
+        // Authoritative Hub profile verification RPC check
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc(
+            "is_human_verified",
+            { p_user_id: resolvedUser.id }
+          )
+          if (!rpcErr && typeof rpcRes === "boolean") {
+            isHumanVerified = rpcRes
+          }
+        } catch {
+          // Non-blocking fallback to extracted proof
+        }
+
         const email = resolvedUser.email || null
         const displayName =
           (resolvedUser.user_metadata?.full_name as string) ||
@@ -71,7 +86,7 @@ export async function getCurrentUserContext(): Promise<UserContext> {
           userId: resolvedUser.id,
           email,
           displayName,
-          isHumanVerified: proof.isHuman && proof.trustState === "active",
+          isHumanVerified,
           verificationTier: proof.verificationTier,
           trustState: proof.trustState,
           nullifierHash: proof.nullifierHash,
@@ -325,4 +340,11 @@ export async function hydrateSessionAction(
     userId,
     isHumanVerified,
   }
+}
+
+/**
+ * Revalidates the user session directly against Supabase and returns the authoritative user context.
+ */
+export async function revalidateUserContextAction(): Promise<UserContext> {
+  return await getCurrentUserContext()
 }

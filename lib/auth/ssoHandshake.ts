@@ -379,6 +379,9 @@ export function extractAntiSybilProof(userOrPayload: unknown): AntiSybilProof {
   };
 }
 
+export const extractVerificationProof = extractAntiSybilProof;
+export const extractHumanProof = extractAntiSybilProof;
+
 // =============================================================================
 // Cryptographic SSO Token Verification
 // =============================================================================
