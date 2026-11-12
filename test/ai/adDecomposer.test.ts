@@ -144,16 +144,21 @@ describe("Ad Decomposer & Cynic Referee Pipeline (TASK-VAL-DECOMPOSER-EDGE)", ()
   });
 
   describe("Edge Function Implementation Verification", () => {
-    it("verifies the valerie-ad-decomposer edge function implements auth checks and error handling", () => {
+    it("verifies the valerie-ad-decomposer edge function implements admin auth, H3 res-8 validation, and atomic audit claim", () => {
       const fnPath = path.resolve(process.cwd(), "supabase/functions/valerie-ad-decomposer/index.ts");
       expect(fs.existsSync(fnPath)).toBe(true);
 
       const code = fs.readFileSync(fnPath, "utf-8");
       expect(code).toContain("Deno.serve");
       expect(code).toContain("Authorization");
+      expect(code).toContain("app_metadata");
+      expect(code).toContain("403");
+      expect(code).toContain("isValidCell");
+      expect(code).toContain("getResolution");
       expect(code).toContain("ad_compliance_audits");
       expect(code).toContain("DISMISSED");
       expect(code).toContain("decomposed_poll_id");
+      expect(code).toContain('.is("decomposed_poll_id", null)');
       expect(code).toContain("h3_res7");
       expect(code).toContain("bestScore >= 0.15");
     });

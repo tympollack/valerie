@@ -13,22 +13,91 @@ import { t, formatNumber } from "@/lib/i18n";
 
 interface DecreePublicViewProps {
   dossier: SovereignDecreeDossierInput;
+  compact?: boolean;
 }
 
-export function DecreePublicView({ dossier }: DecreePublicViewProps) {
+export function DecreePublicView({ dossier, compact = false }: DecreePublicViewProps) {
   const [copiedEmbed, setCopiedEmbed] = useState(false);
 
-  const consensusPct = (dossier.mrpMetrics.supermajorityScore * 100).toFixed(1);
-  const moePct = (dossier.mrpMetrics.marginOfError * 100).toFixed(1);
+  const unavailableLabel = t("decree.view.metricUnavailable");
+  const consensusScore = dossier.mrpMetrics.supermajorityScore;
+  const consensusPctText = consensusScore != null ? `${(consensusScore * 100).toFixed(1)}%` : unavailableLabel;
+  const moeText =
+    dossier.mrpMetrics.marginOfError != null
+      ? `±${(dossier.mrpMetrics.marginOfError * 100).toFixed(1)}%`
+      : unavailableLabel;
+  const confidenceText =
+    dossier.mrpMetrics.confidenceInterval != null
+      ? `${(dossier.mrpMetrics.confidenceInterval * 100).toFixed(0)}%`
+      : unavailableLabel;
   const pdfDownloadUrl = `/api/decree/${dossier.decreeId}/pdf`;
+  const canonicalUrl = dossier.verificationUrl || `https://valerie.sunshade.icu/decree/${dossier.decreeId}`;
   const oembedUrl = `https://valerie.sunshade.icu/api/v1/oembed/decree?url=https://valerie.sunshade.icu/decree/${dossier.decreeId}`;
 
   const copyEmbedCode = () => {
-    const embedHtml = `<iframe src="${dossier.verificationUrl || `https://valerie.sunshade.icu/decree/${dossier.decreeId}`}" width="100%" height="320" frameborder="0"></iframe>`;
+    const separator = canonicalUrl.includes("?") ? "&" : "?";
+    const embedSrc = `${canonicalUrl}${separator}embed=badge`;
+    const embedHtml = `<iframe src="${embedSrc}" width="100%" height="320" frameborder="0"></iframe>`;
     navigator.clipboard.writeText(embedHtml);
     setCopiedEmbed(true);
     setTimeout(() => setCopiedEmbed(false), 2500);
   };
+
+  if (compact) {
+    return (
+      <div className="w-full max-w-2xl mx-auto border-2 border-black dark:border-white p-4 rounded-lg bg-white dark:bg-zinc-950 shadow-sm space-y-3">
+        <div className="flex items-center justify-between gap-2 border-b pb-2 border-zinc-200 dark:border-zinc-800">
+          <div className="flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span className="text-[11px] font-mono font-bold tracking-wider uppercase text-zinc-600 dark:text-zinc-400">
+              {t("decree.view.certifiedBanner")}
+            </span>
+          </div>
+          <span className="text-[10px] font-mono px-2 py-0.5 bg-zinc-100 dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded truncate max-w-[180px]">
+            {dossier.merkleRootHash}
+          </span>
+        </div>
+
+        <h1 className="text-lg font-black tracking-tight text-zinc-900 dark:text-zinc-100 line-clamp-2">
+          {dossier.decreeTitle}
+        </h1>
+        <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-snug line-clamp-3">
+          {dossier.mandateText}
+        </p>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-zinc-50 dark:bg-zinc-900 px-3 py-2 rounded text-xs">
+          <span>
+            {t("decree.view.supermajorityConviction")}: <strong className="text-emerald-600 dark:text-emerald-400">{consensusPctText}</strong>
+          </span>
+          <span>
+            {t("decree.view.verifiedSampleLabel")} <strong>{formatNumber(dossier.mrpMetrics.sampleSize)}</strong>
+          </span>
+          <span>
+            {t("decree.view.marginOfErrorLabel")} <strong>{moeText}</strong>
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 pt-1 text-xs">
+          <a
+            href={canonicalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold underline text-zinc-900 dark:text-zinc-100"
+          >
+            {t("decree.oembed.verifyAuditSignatures")}
+          </a>
+          <a
+            href={pdfDownloadUrl}
+            download={`sovereign-decree-${dossier.decreeId}.pdf`}
+            className="inline-flex items-center gap-1 px-2.5 py-1 bg-black text-white dark:bg-white dark:text-black font-semibold rounded"
+          >
+            <Download className="w-3 h-3" />
+            {t("common.actions.downloadPdf")}
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6 py-6 px-4">
@@ -89,18 +158,18 @@ export function DecreePublicView({ dossier }: DecreePublicViewProps) {
               <span className="text-sm text-zinc-600 dark:text-zinc-400">
                 {t("decree.view.supermajorityConviction")}
               </span>
-              <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{consensusPct}%</span>
+              <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{consensusPctText}</span>
             </div>
             <div className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-full h-2">
               <div
                 className="bg-emerald-600 dark:bg-emerald-500 h-2 rounded-full"
-                style={{ width: `${Math.min(100, Math.max(0, dossier.mrpMetrics.supermajorityScore * 100))}%` }}
+                style={{ width: `${consensusScore != null ? Math.min(100, Math.max(0, consensusScore * 100)) : 0}%` }}
               />
             </div>
             <div className="flex justify-between text-xs text-zinc-600 dark:text-zinc-400 pt-1">
               <span>{t("decree.view.verifiedSampleLabel")} <strong>{formatNumber(dossier.mrpMetrics.sampleSize)}</strong></span>
-              <span>{t("decree.view.marginOfErrorLabel")} <strong>±{moePct}%</strong></span>
-              <span>{t("decree.view.confidenceLevelLabel")} <strong>{(dossier.mrpMetrics.confidenceInterval * 100).toFixed(0)}%</strong></span>
+              <span>{t("decree.view.marginOfErrorLabel")} <strong>{moeText}</strong></span>
+              <span>{t("decree.view.confidenceLevelLabel")} <strong>{confidenceText}</strong></span>
             </div>
           </div>
         </div>
@@ -114,6 +183,10 @@ export function DecreePublicView({ dossier }: DecreePublicViewProps) {
             {dossier.deedInfo.isVerifiedParcelRecord ? (
               <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                 {t("decree.view.verifiedParcelBadge")}
+              </span>
+            ) : dossier.deedInfo.parcelId && dossier.deedInfo.parcelId !== "UNRECORDED" ? (
+              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20">
+                {t("decree.view.reportedUnverifiedParcelBadge")}
               </span>
             ) : (
               <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">

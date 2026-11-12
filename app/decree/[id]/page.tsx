@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 
 interface DecreePageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ embed?: string }>;
 }
 
 export async function generateMetadata({ params }: DecreePageProps): Promise<Metadata> {
@@ -27,8 +28,25 @@ export async function generateMetadata({ params }: DecreePageProps): Promise<Met
   };
 }
 
-export default async function DecreePage({ params }: DecreePageProps) {
+export default async function DecreePage({ params, searchParams }: DecreePageProps) {
   const { id } = await params;
+  const { embed } = (await searchParams) ?? {};
+  const isCompactEmbed = embed === "badge" || embed === "1";
+
+  const supabase = await createClient();
+  const dossier = await compileDecreeDossierData(supabase, id);
+
+  if (!dossier) {
+    notFound();
+  }
+
+  if (isCompactEmbed) {
+    return (
+      <div className="min-h-screen bg-transparent text-zinc-900 dark:text-zinc-100 flex items-center justify-center p-2">
+        <DecreePublicView dossier={dossier} compact />
+      </div>
+    );
+  }
 
   let userContext;
   try {
@@ -43,13 +61,6 @@ export default async function DecreePage({ params }: DecreePageProps) {
       verificationTier: "UNVERIFIED" as const,
       trustState: "active" as const,
     };
-  }
-
-  const supabase = await createClient();
-  const dossier = await compileDecreeDossierData(supabase, id);
-
-  if (!dossier) {
-    notFound();
   }
 
   return (
