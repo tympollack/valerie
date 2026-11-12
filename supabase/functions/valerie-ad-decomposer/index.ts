@@ -296,11 +296,21 @@ Deno.serve(async (req: Request) => {
         const { data: existingPoll } = await supabase
           .schema("valerie")
           .from("polls")
-          .select("id, question_text, scope_tier, h3_res7, target_locale_code, created_at")
+          .select("id, question_text, scope_tier, h3_res7, target_locale_code, is_active, created_at")
           .eq("id", audit.decomposed_poll_id)
-          .single();
+          .maybeSingle();
 
         if (existingPoll) {
+          // Recover inactive poll if prior attempt was interrupted
+          if (!existingPoll.is_active) {
+            await supabase
+              .schema("valerie")
+              .from("polls")
+              .update({ is_active: true })
+              .eq("id", existingPoll.id);
+            existingPoll.is_active = true;
+          }
+
           return jsonResponse({
             success: true,
             poll: existingPoll,
@@ -376,7 +386,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Insert new poll into valerie.polls (inactive until audit claim succeeds when auditId is provided)
+    // Insert new active poll into valerie.polls
     const { data: newPoll, error: pollErr } = await supabase
       .schema("valerie")
       .from("polls")
@@ -385,7 +395,7 @@ Deno.serve(async (req: Request) => {
         scope_tier: "LOCAL",
         h3_res7: h3Res7,
         target_locale_code: `h3:${normalizedH3Res8}`,
-        is_active: auditId ? false : true,
+        is_active: true,
         material_domain: "CIVIC_INFRASTRUCTURE",
         material_consequence_score: 0.8,
         related_ecosystem_refs: {
@@ -395,7 +405,7 @@ Deno.serve(async (req: Request) => {
           flagged_categories: flaggedCategories,
         },
       })
-      .select("id, question_text, scope_tier, h3_res7, target_locale_code, created_at")
+      .select("id, question_text, scope_tier, h3_res7, target_locale_code, is_active, created_at")
       .single();
 
     if (pollErr || !newPoll) {
@@ -445,11 +455,21 @@ Deno.serve(async (req: Request) => {
           const { data: existingPoll } = await supabase
             .schema("valerie")
             .from("polls")
-            .select("id, question_text, scope_tier, h3_res7, target_locale_code, created_at")
+            .select("id, question_text, scope_tier, h3_res7, target_locale_code, is_active, created_at")
             .eq("id", latestAudit.decomposed_poll_id)
             .maybeSingle();
 
           if (existingPoll) {
+            // Recover inactive poll if prior attempt was interrupted
+            if (!existingPoll.is_active) {
+              await supabase
+                .schema("valerie")
+                .from("polls")
+                .update({ is_active: true })
+                .eq("id", existingPoll.id);
+              existingPoll.is_active = true;
+            }
+
             return jsonResponse({
               success: true,
               poll: existingPoll,
@@ -462,31 +482,6 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(
           { error: `Audit '${auditId}' could not be claimed concurrently` },
           409
-        );
-      }
-
-      // Activate poll only after winning the atomic audit claim
-      const { error: activateErr } = await supabase
-        .schema("valerie")
-        .from("polls")
-        .update({ is_active: true })
-        .eq("id", newPoll.id);
-
-      if (activateErr) {
-        await supabase
-          .schema("valerie")
-          .from("ad_compliance_audits")
-          .update({
-            decomposed_poll_id: null,
-            status: priorAuditStatus || "NORMALIZED",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", auditId)
-          .eq("decomposed_poll_id", newPoll.id);
-        await supabase.schema("valerie").from("polls").delete().eq("id", newPoll.id);
-        return jsonResponse(
-          { error: `Failed to activate decomposed poll: ${activateErr.message}` },
-          500
         );
       }
     }

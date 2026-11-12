@@ -77,14 +77,21 @@ export async function GET(request: Request) {
     const safeTitle = escapeHtml(decree.decree_title);
     const safeMandate = escapeHtml(decree.mandate_text);
     const safeStatus = escapeHtml(decree.status);
-    const consensusPercent = (Number(decree.calibrated_consensus_share) * 100).toFixed(1);
+    const rawConsensus =
+      decree.calibrated_consensus_share != null &&
+      Number.isFinite(Number(decree.calibrated_consensus_share))
+        ? Number(decree.calibrated_consensus_share)
+        : null;
     const citizenCount = Number(decree.verified_citizen_count).toLocaleString();
     const shortHash = decree.merkle_root_hash ? `${decree.merkle_root_hash.slice(0, 10)}...${decree.merkle_root_hash.slice(-8)}` : "TAMPER-SEALED";
     const canonicalDecreeUrl = `https://valerie.sunshade.icu/decree/${encodeURIComponent(decree.id)}`;
 
     const brandTag = escapeHtml(t("common.branding.sovereignDecree"));
     const verifyLinkText = escapeHtml(t("decree.oembed.verifyAuditSignatures"));
-    const consensusBadgeText = escapeHtml(t("decree.oembed.consensusBadge", { percent: consensusPercent }));
+    const consensusBadgeText =
+      rawConsensus != null
+        ? escapeHtml(t("decree.oembed.consensusBadge", { percent: (rawConsensus * 100).toFixed(1) }))
+        : escapeHtml(t("decree.oembed.consensusBadgeUnavailable"));
     const citizenCountText = escapeHtml(t("decree.oembed.verifiedCitizens", { count: citizenCount }));
     const statusText = escapeHtml(t("decree.oembed.statusLabel", { status: safeStatus }));
     const sealedText = escapeHtml(t("decree.oembed.sealedDate", { date: formatDate(decree.created_at) }));

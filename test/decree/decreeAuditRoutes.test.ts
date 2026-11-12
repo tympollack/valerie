@@ -105,6 +105,33 @@ describe("Public Decree Verification Routes (TASK-VAL-ZONING-RECORD)", () => {
       expect(json.merkle_root_hash).toBe(mockDecreeRecord.merkle_root_hash);
     });
 
+    it("renders Unavailable for consensus in oEmbed badge when calibrated_consensus_share is null", async () => {
+      const decreeWithoutConsensus = {
+        ...mockDecreeRecord,
+        id: "d0000000-0000-0000-0000-000000000003",
+        calibrated_consensus_share: null,
+      };
+
+      const { createClient } = await import("@/lib/supabase/server");
+      vi.mocked(createClient).mockImplementationOnce(async () => ({
+        schema: vi.fn().mockReturnThis(),
+        from: vi.fn().mockImplementation((table: string) => ({
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: decreeWithoutConsensus, error: null }),
+          }),
+        })),
+      } as any));
+
+      const req = new Request(`https://valerie.sunshade.icu/api/v1/oembed/decree?url=https://valerie.sunshade.icu/decree/${decreeWithoutConsensus.id}`);
+      const res = await getOembed(req);
+      const json = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(json.html).not.toContain("0.0% Supermajority");
+      expect(json.html).toContain("Consensus: <strong style=\"color:#000;\">Unavailable</strong>");
+    });
+
     it("escapes malicious HTML characters in decree title and mandate to prevent XSS (SEC_0001)", async () => {
       const maliciousDecree = {
         ...mockDecreeRecord,

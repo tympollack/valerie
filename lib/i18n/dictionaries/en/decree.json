@@ -65,6 +65,7 @@
   "oembed": {
     "verifyAuditSignatures": "Verify Audit Signatures & Download Dossier →",
     "consensusBadge": "{{percent}}% Supermajority",
+    "consensusBadgeUnavailable": "Unavailable",
     "verifiedCitizens": "Verified Citizens: {{count}}",
     "statusLabel": "Status: {{status}}",
     "sealedDate": "Sealed: {{date}}"

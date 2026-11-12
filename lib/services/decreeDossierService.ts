@@ -44,6 +44,7 @@ function pickFiniteMetric(
     for (const key of keys) {
       const raw = src[key];
       if (raw === null || raw === undefined || raw === "") continue;
+      if (typeof raw !== "number" && (typeof raw !== "string" || !raw.trim())) continue;
       const num = Number(raw);
       if (Number.isFinite(num)) {
         return num;

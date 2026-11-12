@@ -212,6 +212,72 @@ describe("Sovereign Citizen Decree Dossier Service (TASK-VAL-DOSSIER-SERVICE)", 
     expect(data?.mrpMetrics.turnoutWeight).toBeNull();
   });
 
+  it("skips boolean and array values without converting them to zero (BUG_0002)", async () => {
+    const mockSupabase = {
+      schema: vi.fn().mockReturnThis(),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === "sovereign_decrees") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: {
+                id: "dec-bool",
+                poll_id: "poll-bool",
+                decree_title: "Bool Skip Decree",
+                mandate_text: "Mandate",
+                calibrated_consensus_share: null,
+                verified_citizen_count: 500,
+                merkle_root_hash: "hashbool",
+                created_at: "2026-11-09T00:00:00Z",
+                metadata: {
+                  mrp_metrics: {
+                    margin_of_error: false, // boolean must be skipped, not coerced to 0
+                    confidence_interval: [], // array must be skipped, not coerced to 0
+                    supermajority_score: "", // empty string must be skipped
+                  },
+                },
+              },
+              error: null,
+            }),
+          };
+        }
+        if (table === "polls") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            single: vi.fn().mockResolvedValue({
+              data: {
+                id: "poll-bool",
+                metadata: {
+                  mrp_metrics: {
+                    margin_of_error: 0.024,
+                    confidence_interval: 0.95,
+                    supermajority_score: 0.82,
+                  },
+                },
+              },
+              error: null,
+            }),
+          };
+        }
+        if (table === "ad_compliance_audits") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+          };
+        }
+        return { select: vi.fn().mockReturnThis() };
+      }),
+    } as any;
+
+    const data = await compileDecreeDossierData(mockSupabase, "dec-bool");
+    expect(data?.mrpMetrics.supermajorityScore).toBe(0.82);
+    expect(data?.mrpMetrics.marginOfError).toBe(0.024);
+    expect(data?.mrpMetrics.confidenceInterval).toBe(0.95);
+  });
+
   it("attaches statutory lease termination notice when active breach exists and keeps unverified parcel_id unverified", async () => {
     const mockSupabase = {
       schema: vi.fn().mockReturnThis(),
