@@ -6,6 +6,7 @@ import {
   Lock,
   Sparkles,
   AlertCircle,
+  AlertTriangle,
   HelpCircle,
   MessageSquare,
   Compass,
@@ -23,6 +24,8 @@ import type { LocaleGranularity, LocaleSentimentRecord } from "@/app/actions/val
 import { PremiseChallengeDrawer } from "@/components/valerie/PremiseChallengeDrawer"
 import { castVote } from "@/app/actions/vote"
 import { flagPollWithCommitGate, type FlagReason } from "@/app/actions/valerieFlagActions"
+import type { UserContext } from "@/app/actions/auth"
+import { usePollAuth } from "@/hooks/usePollAuth"
 import {
   getStanceArchetype,
   getStanceArchetypeMeta,
@@ -36,6 +39,7 @@ import { ChapterEndCard } from "@/components/valerie/ChapterEndCard"
 import { PacketProgressBanner } from "@/components/valerie/PacketProgressBanner"
 import { LikertScaleInput } from "@/components/valerie/LikertScaleInput"
 import { BivariateCoordinatePreview } from "@/components/valerie/BivariateCoordinatePreview"
+import { InlineVerificationGate } from "@/components/valerie/InlineVerificationGate"
 import { cn } from "@/lib/utils"
 
 // =============================================================================
@@ -77,6 +81,7 @@ export interface BivariatePollCardProps {
   targetLocaleCode?: string
   historicalZScore?: number | null
   historicalBaseline?: { mean: number; stddev: number } | null
+  userContext?: UserContext | null
 }
 
 // =============================================================================
@@ -102,6 +107,7 @@ export function BivariatePollCard({
   targetLocaleCode,
   historicalZScore,
   historicalBaseline,
+  userContext: userContextProp,
 }: BivariatePollCardProps) {
   // --- Packet Sequence State
   const [activePacketIndex, setActivePacketIndex] = useState<number>(0)
@@ -175,10 +181,29 @@ export function BivariatePollCard({
     }
   }, [])
 
+  const effectiveUserContext = usePollAuth(userContextProp)
+  const isUnverified = Boolean(
+    (effectiveUserContext?.authenticated && !effectiveUserContext?.isHumanVerified) ||
+      errorMsg?.toLowerCase().includes("verification")
+  )
+  const showInlineVerificationGate =
+    !isSubmitted && isUnverified && (hasInteractedLikert || errorMsg !== null)
+
+  const hubBaseUrl =
+    typeof window !== "undefined" &&
+    window.location.hostname.endsWith(".sunshade.icu")
+      ? "https://hub.sunshade.icu"
+      : "https://hub.sunshade.icu"
+
+  const currentHref =
+    typeof window !== "undefined" ? window.location.href : returnUrl || "/"
+
   const callbackUrl =
     typeof window !== "undefined"
       ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnUrl || "/")}`
       : "/auth/callback"
+
+  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true&redirectTo=${encodeURIComponent(currentHref)}`
 
   const activeLikert = useMemo(
     () => LIKERT_STEPS.find((s) => s.value === likertScore) || LIKERT_STEPS[2],
@@ -558,13 +583,13 @@ export function BivariatePollCard({
                     {errorMsg.toLowerCase().includes("verification") && (
                       <div className="flex flex-wrap items-center gap-2 pt-1">
                         <a
-                          href={`https://hub.sunshade.icu/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`}
+                          href={verifyUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center gap-1 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-bold text-slate-950 shadow-sm transition-colors hover:bg-amber-400"
+                          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 px-3 py-2 text-xs font-semibold text-slate-950 shadow-sm transition-colors focus-visible:ring-2 focus-visible:ring-amber-300 focus:outline-none"
                         >
-                          <span>Verify on SunShade Hub</span>
-                          <ExternalLink className="h-3 w-3" />
+                          <span>Confirm Identity on Hub</span>
+                          <ExternalLink className="h-3 w-3 text-slate-950" />
                         </a>
                         <Link
                           href="/settings"
@@ -597,6 +622,11 @@ export function BivariatePollCard({
                 isSubmitting={isFlagPending}
                 error={errorMsg}
               />
+
+              {/* Inline Verification Action Gate for Unverified Users */}
+              {showInlineVerificationGate && (
+                <InlineVerificationGate verifyUrl={verifyUrl} />
+              )}
 
               {/* 6. Primary Action Buttons: Vote Commit CTA & Premise Challenge Button */}
               <div className="flex flex-col sm:flex-row items-center gap-3">
