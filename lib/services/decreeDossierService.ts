@@ -33,6 +33,27 @@ export function getStandardLeaseNuisanceClause(locale = "en-US") {
 export const STANDARD_LEASE_NUISANCE_CLAUSE = getStandardLeaseNuisanceClause();
 
 /**
+ * Extracts a finite numeric measurement from candidate metadata records without fabricating defaults.
+ */
+function pickFiniteMetric(
+  sources: Array<Record<string, unknown> | null | undefined>,
+  keys: string[]
+): number | null {
+  for (const src of sources) {
+    if (!src || typeof src !== "object") continue;
+    for (const key of keys) {
+      const raw = src[key];
+      if (raw === null || raw === undefined || raw === "") continue;
+      const num = Number(raw);
+      if (Number.isFinite(num)) {
+        return num;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Loads raw decree, poll, and ad audit records and synthesizes a certified dossier input object.
  * Strictly adheres to Production Data Hygiene (Rule 3): Zero fake data. Empty queries render empty records.
  */
@@ -112,10 +133,24 @@ export async function compileDecreeDossierData(
     ? auditMetadata.hardware_photos
     : [];
 
-  // Parse deed info adhering to Rule 3: Zero fake data. Do not invent parcel facts.
-  const hasVerifiedParcel = Boolean(auditRecord?.parcel_id || auditMetadata.parcel_id);
+  // Parse deed info adhering to Rule 3: Zero fake data. Distinguish reported parcel IDs from verified deeds.
+  const rawParcelId =
+    (typeof auditRecord?.parcel_id === "string" && auditRecord.parcel_id.trim()) ||
+    (typeof auditMetadata.parcel_id === "string" && auditMetadata.parcel_id.trim()) ||
+    null;
+  const hasVerifiedProvenance =
+    auditMetadata.deed_verified === true || auditMetadata.verified_parcel_record === true;
+  const hasRecordedDeedDetails = Boolean(
+    rawParcelId &&
+      typeof auditMetadata.owner_name === "string" &&
+      auditMetadata.owner_name.trim() &&
+      ((typeof auditMetadata.property_address === "string" && auditMetadata.property_address.trim()) ||
+        (typeof auditMetadata.deed_book_page === "string" && auditMetadata.deed_book_page.trim()))
+  );
+  const hasVerifiedParcel = Boolean(hasVerifiedProvenance && hasRecordedDeedDetails);
+
   const deedInfo = {
-    parcelId: auditRecord?.parcel_id || auditMetadata.parcel_id || "UNRECORDED",
+    parcelId: rawParcelId || "UNRECORDED",
     ownerName: auditMetadata.owner_name || "Unrecorded",
     propertyAddress: auditMetadata.property_address || (poll?.target_locale_code ? `District ${poll.target_locale_code}` : "Unspecified"),
     zoningClassification: auditMetadata.zoning_classification || "Unclassified",
@@ -125,10 +160,27 @@ export async function compileDecreeDossierData(
     isVerifiedParcelRecord: hasVerifiedParcel,
   };
 
-  const sampleSize = Number(decree.verified_citizen_count) || 0;
-  const consensusShare = Number(decree.calibrated_consensus_share) || 0.70;
-  // Margin of error calculation based on sample size: 1 / sqrt(N)
-  const marginOfError = sampleSize > 0 ? Number((1 / Math.sqrt(sampleSize)).toFixed(4)) : 0.05;
+  // Load only measured/stored MRP consensus metrics; never fabricate fallback statistics
+  const metricSources: Array<Record<string, unknown> | null | undefined> = [
+    decree as Record<string, unknown>,
+    (decree?.metadata as Record<string, unknown> | undefined)?.mrp_metrics as Record<string, unknown> | undefined,
+    decree?.mrp_metrics as Record<string, unknown> | undefined,
+    poll as Record<string, unknown> | null | undefined,
+    (poll?.metadata as Record<string, unknown> | undefined)?.mrp_metrics as Record<string, unknown> | undefined,
+  ];
+  const sampleSize = pickFiniteMetric([decree as Record<string, unknown>], ["verified_citizen_count"]) ?? 0;
+  const supermajorityScore = pickFiniteMetric(metricSources, [
+    "calibrated_consensus_share",
+    "supermajority_score",
+    "supermajorityScore",
+  ]);
+  const marginOfError = pickFiniteMetric(metricSources, ["margin_of_error", "marginOfError"]);
+  const confidenceInterval = pickFiniteMetric(metricSources, ["confidence_interval", "confidenceInterval"]);
+  const turnoutWeight = pickFiniteMetric(metricSources, ["turnout_weight", "turnoutWeight"]);
+  const demographicCoverageScore = pickFiniteMetric(metricSources, [
+    "demographic_coverage_score",
+    "demographicCoverageScore",
+  ]);
 
   // Only certify lease nuisance termination notice if confirmed municipal setback breach exists
   const hasActiveBreach = gisProofs.some((proof) => proof.isBreach === true);
@@ -143,11 +195,11 @@ export async function compileDecreeDossierData(
     deedInfo,
     mrpMetrics: {
       sampleSize,
-      supermajorityScore: consensusShare,
+      supermajorityScore,
       marginOfError,
-      confidenceInterval: 0.95,
-      turnoutWeight: 1.0,
-      demographicCoverageScore: 0.92,
+      confidenceInterval,
+      turnoutWeight,
+      demographicCoverageScore,
     },
     gisProofs,
     photos,
@@ -157,7 +209,7 @@ export async function compileDecreeDossierData(
 }
 
 /**
- * Builds the complete Sovereign Citizen Decree dossier and generates the certified PDF/A document.
+ * Builds the complete Sovereign Citizen Decree dossier and generates the certified PDF 1.4 document.
  * Enforces < 1500ms execution SLA.
  */
 export async function generateDecreeDossierService(

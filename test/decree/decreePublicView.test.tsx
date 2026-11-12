@@ -80,7 +80,7 @@ describe("DecreePublicView Component (TASK-VAL-ZONING-RECORD)", () => {
     expect(downloadLink).toHaveAttribute("download", `sovereign-decree-${mockDossier.decreeId}.pdf`);
   });
 
-  it("copies newsroom oEmbed code to clipboard on click", async () => {
+  it("copies compact newsroom badge embed code to clipboard on click", async () => {
     Object.assign(navigator, {
       clipboard: {
         writeText: vi.fn().mockResolvedValue(undefined),
@@ -93,8 +93,37 @@ describe("DecreePublicView Component (TASK-VAL-ZONING-RECORD)", () => {
     fireEvent.click(copyBtn);
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      expect.stringContaining(`<iframe src="${mockDossier.verificationUrl}"`)
+      expect.stringContaining(`<iframe src="${mockDossier.verificationUrl}?embed=badge"`)
     );
     expect(await screen.findByText(/Embed Snippet Copied/i)).toBeInTheDocument();
+  });
+
+  it("renders compact badge mode without full dossier sections", () => {
+    render(<DecreePublicView dossier={mockDossier} compact />);
+
+    expect(screen.getByText("Public Advertising Curfew Decree")).toBeInTheDocument();
+    expect(screen.getByText("84.2%")).toBeInTheDocument();
+    expect(screen.queryByText(/Geographic Boundary & Setback Proofs/i)).not.toBeInTheDocument();
+  });
+
+  it("renders Unavailable for unmeasured MRP metrics and distinguishes reported unverified parcel", () => {
+    const partialDossier: SovereignDecreeDossierInput = {
+      ...mockDossier,
+      deedInfo: {
+        ...mockDossier.deedInfo,
+        isVerifiedParcelRecord: false,
+      },
+      mrpMetrics: {
+        sampleSize: 100,
+        supermajorityScore: null,
+        marginOfError: null,
+        confidenceInterval: null,
+        turnoutWeight: null,
+      },
+    };
+
+    render(<DecreePublicView dossier={partialDossier} />);
+    expect(screen.getByText("Reported Parcel (Unverified Deed)")).toBeInTheDocument();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(3);
   });
 });

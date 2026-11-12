@@ -1,5 +1,5 @@
 /**
- * Project Valerie: High-Contrast Legal-Grade PDF/A Generator
+ * Project Valerie: High-Contrast Legal-Grade PDF 1.4 Generator
  * File: lib/services/decreePdfGenerator.ts
  * Work Item: [TASK-VAL-DOSSIER-SERVICE] / [STORY-VAL-LANDOWNER-DECREE]
  */
@@ -8,19 +8,68 @@ import { SovereignDecreeDossierInput } from "../types/decreeDossier";
 import { t } from "../i18n";
 
 /**
- * Escapes characters for PDF literal strings.
+ * Unicode-to-WinAnsi byte mapping for Windows-1252 code points 0x80-0x9F.
+ * Code points 0xA0-0xFF map 1:1 to WinAnsi bytes (including § = 0xA7, ± = 0xB1).
+ */
+const WIN_ANSI_EXTRA_MAP: Record<number, number> = {
+  0x20ac: 0x80, // €
+  0x201a: 0x82, // ‚
+  0x0192: 0x83, // ƒ
+  0x201e: 0x84, // „
+  0x2026: 0x85, // …
+  0x2020: 0x86, // †
+  0x2021: 0x87, // ‡
+  0x02c6: 0x88, // ˆ
+  0x2030: 0x89, // ‰
+  0x0160: 0x8a, // Š
+  0x2039: 0x8b, // ‹
+  0x0152: 0x8c, // Œ
+  0x017d: 0x8e, // Ž
+  0x2018: 0x91, // ‘
+  0x2019: 0x92, // ’
+  0x201c: 0x93, // “
+  0x201d: 0x94, // ”
+  0x2022: 0x95, // •
+  0x2013: 0x96, // –
+  0x2014: 0x97, // —
+  0x02dc: 0x98, // ˜
+  0x2122: 0x99, // ™
+  0x0161: 0x9a, // š
+  0x203a: 0x9b, // ›
+  0x0153: 0x9c, // œ
+  0x017e: 0x9e, // ž
+  0x0178: 0x9f, // Ÿ
+};
+
+/**
+ * Escapes characters and encodes non-ASCII WinAnsi glyphs (such as ± and §)
+ * as PDF octal literal escapes so built-in Type 1 fonts render without UTF-8 mojibake.
  */
 function escapePdfText(str: string): string {
-  return str
-    .replace(/\\/g, "\\\\")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/[\r\n]+/g, " ");
+  const normalized = str.replace(/[\r\n\t]+/g, " ");
+  let out = "";
+
+  for (const ch of normalized) {
+    const code = ch.codePointAt(0) ?? 0x3f;
+    if (ch === "\\" || ch === "(" || ch === ")") {
+      out += `\\${ch}`;
+    } else if (code >= 0x20 && code <= 0x7e) {
+      out += ch;
+    } else if (code >= 0xa0 && code <= 0xff) {
+      out += `\\${code.toString(8).padStart(3, "0")}`;
+    } else if (code in WIN_ANSI_EXTRA_MAP) {
+      out += `\\${WIN_ANSI_EXTRA_MAP[code].toString(8).padStart(3, "0")}`;
+    } else {
+      out += "?";
+    }
+  }
+
+  return out;
 }
 
 /**
- * Generates a valid standard-compliant PDF document byte array in high-contrast legal format.
- * Supports multi-page flow and precise cross-references.
+ * Generates a valid PDF 1.4 document byte array in high-contrast legal format.
+ * Supports multi-page flow, WinAnsi symbol encoding, and object-ordered cross-references.
  */
 export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Array {
   // Margins and Dimensions (Standard US Letter: 612 x 792 pt)
@@ -81,7 +130,9 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
   addText(t("decree.pdf.decreeIdPrefix", { id: input.decreeId, date: input.createdAt }), "F1", 9, "0.2 0.2 0.2", 14);
   const parcelStatusLabel = input.deedInfo.isVerifiedParcelRecord
     ? t("decree.pdf.recordedParcel")
-    : t("decree.pdf.unrecordedParcel");
+    : input.deedInfo.parcelId && input.deedInfo.parcelId !== "UNRECORDED"
+      ? t("decree.pdf.reportedUnverifiedParcel")
+      : t("decree.pdf.unrecordedParcel");
   addText(
     t("decree.pdf.parcelMeta", {
       parcelId: input.deedInfo.parcelId,
@@ -118,25 +169,54 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
 
   // 4. MRP Neighborhood Consensus Breakdown
   addText(t("decree.pdf.section2Title"), "F2", 11, "0 0 0", 16);
-  const convPct = (input.mrpMetrics.supermajorityScore * 100).toFixed(1);
-  const moePct = (input.mrpMetrics.marginOfError * 100).toFixed(1);
-  const confPct = (input.mrpMetrics.confidenceInterval * 100).toFixed(0);
+  const unavailableLabel = t("decree.pdf.metricUnavailable");
+  const allConsensusMeasured =
+    input.mrpMetrics.supermajorityScore != null &&
+    input.mrpMetrics.marginOfError != null &&
+    input.mrpMetrics.confidenceInterval != null;
+  const turnoutText =
+    input.mrpMetrics.turnoutWeight != null
+      ? String(input.mrpMetrics.turnoutWeight)
+      : unavailableLabel;
 
-  addText(
-    t("decree.pdf.supermajorityLine", {
-      conviction: convPct,
-      margin: moePct,
-      confidence: confPct,
-    }),
-    "F2",
-    9,
-    "0 0 0",
-    14
-  );
+  if (allConsensusMeasured) {
+    addText(
+      t("decree.pdf.supermajorityLine", {
+        conviction: (input.mrpMetrics.supermajorityScore! * 100).toFixed(1),
+        margin: (input.mrpMetrics.marginOfError! * 100).toFixed(1),
+        confidence: (input.mrpMetrics.confidenceInterval! * 100).toFixed(0),
+      }),
+      "F2",
+      9,
+      "0 0 0",
+      14
+    );
+  } else {
+    addText(
+      t("decree.pdf.supermajorityLineUnavailable", {
+        conviction:
+          input.mrpMetrics.supermajorityScore != null
+            ? `${(input.mrpMetrics.supermajorityScore * 100).toFixed(1)}%`
+            : unavailableLabel,
+        margin:
+          input.mrpMetrics.marginOfError != null
+            ? `±${(input.mrpMetrics.marginOfError * 100).toFixed(1)}%`
+            : unavailableLabel,
+        confidence:
+          input.mrpMetrics.confidenceInterval != null
+            ? `${(input.mrpMetrics.confidenceInterval * 100).toFixed(0)}%`
+            : unavailableLabel,
+      }),
+      "F2",
+      9,
+      "0 0 0",
+      14
+    );
+  }
   addText(
     t("decree.pdf.sampleSizeLine", {
       sampleSize: input.mrpMetrics.sampleSize.toLocaleString(),
-      turnoutWeight: input.mrpMetrics.turnoutWeight,
+      turnoutWeight: turnoutText,
     }),
     "F1",
     9,
@@ -223,10 +303,10 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
   const verifyUrl = input.verificationUrl || `https://valerie.sunshade.icu/decree/${input.decreeId}`;
   addText(t("decree.pdf.verificationLinkPrefix", { url: verifyUrl }), "F2", 8, "0 0 0", 12);
 
-  // Assemble Standard Multi-Page PDF
+  // Assemble Standard Multi-Page PDF 1.4
   const totalPages = pagesTextStreams.length;
   const header = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
-  const offset = Buffer.byteLength(header, "utf-8"); // Fix BUG-0001: exact byte offset
+  const headerBytes = Buffer.byteLength(header, "latin1");
 
   // Object indices:
   // 1: Catalog
@@ -245,44 +325,58 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
     streamObjNums.push(3 + totalPages + i);
   }
 
-  const objects: string[] = [];
+  const objects: Array<{ num: number; raw: string }> = [];
 
   // Obj 1: Catalog
-  objects.push(`1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj`);
+  objects.push({ num: 1, raw: `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj` });
 
   // Obj 2: Pages
   const kidsStr = pageObjNums.map((n) => `${n} 0 R`).join(" ");
-  objects.push(`2 0 obj\n<< /Type /Pages /Kids [${kidsStr}] /Count ${totalPages} >>\nendobj`);
+  objects.push({ num: 2, raw: `2 0 obj\n<< /Type /Pages /Kids [${kidsStr}] /Count ${totalPages} >>\nendobj` });
 
-  // Page objects & Content Streams
+  // Emit all Page objects (3 .. 2+totalPages) before Content Stream objects so xref matches object numbers
   for (let i = 0; i < totalPages; i++) {
     const pageNum = pageObjNums[i];
     const streamNum = streamObjNums[i];
-    const streamContent = pagesTextStreams[i].join("\n");
-    const streamLen = Buffer.byteLength(streamContent, "utf-8");
-
-    // Page Object
-    objects.push(
-      `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${streamNum} 0 R /Resources << /Font << /F1 ${fontF1Obj} 0 R /F2 ${fontF2Obj} 0 R >> >> >>\nendobj`
-    );
-
-    // Stream Object
-    objects.push(`${streamNum} 0 obj\n<< /Length ${streamLen} >>\nstream\n${streamContent}\nendstream\nendobj`);
+    objects.push({
+      num: pageNum,
+      raw: `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${streamNum} 0 R /Resources << /Font << /F1 ${fontF1Obj} 0 R /F2 ${fontF2Obj} 0 R >> >> >>\nendobj`,
+    });
   }
 
-  // Font Objects
-  objects.push(`${fontF1Obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj`);
-  objects.push(`${fontF2Obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj`);
+  // Emit all Content Stream objects (3+totalPages .. 2+totalPages*2)
+  for (let i = 0; i < totalPages; i++) {
+    const streamNum = streamObjNums[i];
+    const streamContent = pagesTextStreams[i].join("\n");
+    const streamLen = Buffer.byteLength(streamContent, "latin1");
+    objects.push({
+      num: streamNum,
+      raw: `${streamNum} 0 obj\n<< /Length ${streamLen} >>\nstream\n${streamContent}\nendstream\nendobj`,
+    });
+  }
+
+  // Font Objects with WinAnsiEncoding for ±, §, and legal punctuation
+  objects.push({
+    num: fontF1Obj,
+    raw: `${fontF1Obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj`,
+  });
+  objects.push({
+    num: fontF2Obj,
+    raw: `${fontF2Obj} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj`,
+  });
+
+  // Sort strictly by object number so XRef entry i always points to object i
+  objects.sort((a, b) => a.num - b.num);
 
   // Build PDF buffer with XRef table
   const offsets: number[] = [];
   let body = "";
   for (const obj of objects) {
-    offsets.push(offset + Buffer.byteLength(body, "utf-8"));
-    body += obj + "\n";
+    offsets.push(headerBytes + Buffer.byteLength(body, "latin1"));
+    body += obj.raw + "\n";
   }
 
-  const xrefStart = offset + Buffer.byteLength(body, "utf-8");
+  const xrefStart = headerBytes + Buffer.byteLength(body, "latin1");
   let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (const off of offsets) {
     xref += `${String(off).padStart(10, "0")} 00000 n \n`;
@@ -291,5 +385,5 @@ export function generateDecreePdf(input: SovereignDecreeDossierInput): Uint8Arra
   const trailer = `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
   const fullPdf = header + body + xref + trailer;
 
-  return new Uint8Array(Buffer.from(fullPdf, "utf-8"));
+  return new Uint8Array(Buffer.from(fullPdf, "latin1"));
 }

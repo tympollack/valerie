@@ -34,11 +34,11 @@ export interface HardwarePhotoAttestation {
 
 export interface MrpConsensusMetrics {
   sampleSize: number;
-  supermajorityScore: number; // e.g. 0.78 (78%)
-  marginOfError: number; // e.g. 0.021 (+/- 2.1%)
-  confidenceInterval: number; // e.g. 0.95
-  turnoutWeight: number;
-  demographicCoverageScore?: number;
+  supermajorityScore: number | null; // e.g. 0.78 (78%), or null if unavailable
+  marginOfError?: number | null; // e.g. 0.021 (+/- 2.1%), only when measured
+  confidenceInterval?: number | null; // e.g. 0.95, only when measured
+  turnoutWeight?: number | null; // only when measured
+  demographicCoverageScore?: number | null; // only when measured
 }
 
 export interface LeaseTerminationNotice {

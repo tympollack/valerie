@@ -5,7 +5,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cellToParent } from "https://esm.sh/h3-js@4.5.0";
+import { cellToParent, isValidCell, getResolution } from "https://esm.sh/h3-js@4.5.0";
 
 const CORS_HEADERS: HeadersInit = {
   "Access-Control-Allow-Origin": "*",
@@ -87,9 +87,13 @@ function inferCategoriesFromOcr(ocrText: string): string[] {
 }
 
 function resolveRes7FromRes8(h3Index?: string | null): string | null {
-  if (!h3Index) return null;
+  if (!h3Index || typeof h3Index !== "string") return null;
+  const trimmed = h3Index.trim();
+  if (!trimmed || !isValidCell(trimmed) || getResolution(trimmed) !== 8) {
+    return null;
+  }
   try {
-    return cellToParent(h3Index, 7);
+    return cellToParent(trimmed, 7);
   } catch {
     return null;
   }
@@ -218,24 +222,39 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Missing Supabase service environment variables" }, 500);
     }
 
-    // Security: Authenticate caller token (service_role or authenticated user)
+    // Security: Authenticate caller token (cron secret, service_role, or verified admin user)
     const authHeader = req.headers.get("Authorization") || "";
-    const token = authHeader.replace(/^Bearer\s+/i, "");
-    if (!token) {
-      return jsonResponse({ error: "Missing required authorization bearer token" }, 401);
-    }
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const cronSecretHeader = req.headers.get("x-cron-secret")?.trim() || "";
+    const expectedCronSecret = Deno.env.get("CRON_SECRET")?.trim() || "";
+    const isCronAuthorized = Boolean(expectedCronSecret && cronSecretHeader === expectedCronSecret);
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const isServiceRole = token === supabaseServiceKey;
+    const isServiceRole = Boolean(token && token === supabaseServiceKey);
 
-    if (!isServiceRole) {
+    if (!isCronAuthorized && !isServiceRole) {
+      if (!token) {
+        return jsonResponse({ error: "Missing required authorization bearer token" }, 401);
+      }
+
       const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
       if (userErr || !user) {
         return jsonResponse({ error: "Unauthorized: Invalid or expired caller token" }, 401);
       }
+
+      // Strictly inspect app_metadata (never client-writable user_metadata)
+      const role = user.app_metadata?.role;
+      const isAdmin = user.app_metadata?.is_admin === true;
+      if (role !== "admin" && role !== "service_role" && !isAdmin) {
+        return jsonResponse(
+          { error: "Forbidden: Administrative privileges required to decompose audits or publish polls" },
+          403
+        );
+      }
     }
 
     let auditId: string | null = null;
+    let priorAuditStatus: string | null = null;
     let ocrRawText = "";
     let flaggedCategories: string[] = [];
     let h3IndexRes8: string | null = null;
@@ -291,6 +310,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      priorAuditStatus = audit.status;
       ocrRawText = audit.ocr_raw_text || ocrRawText;
       flaggedCategories = audit.flagged_categories?.length ? audit.flagged_categories : flaggedCategories;
       h3IndexRes8 = audit.h3_index_res8 || h3IndexRes8;
@@ -301,6 +321,16 @@ Deno.serve(async (req: Request) => {
     if (!ocrRawText && flaggedCategories.length === 0) {
       return jsonResponse(
         { error: "Provide either audit_id or ocr_raw_text and flagged_categories" },
+        400
+      );
+    }
+
+    // Require valid resolution-8 H3 index before publishing any LOCAL poll (prevents global fallback leak)
+    const normalizedH3Res8 = typeof h3IndexRes8 === "string" ? h3IndexRes8.trim() : "";
+    const h3Res7 = resolveRes7FromRes8(normalizedH3Res8);
+    if (!normalizedH3Res8 || !h3Res7) {
+      return jsonResponse(
+        { error: "A valid resolution-8 H3 index (h3_index_res8) is required to publish a LOCAL poll" },
         400
       );
     }
@@ -346,10 +376,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Derive voter-eligible resolution-7 cell from resolution-8 index
-    const h3Res7 = resolveRes7FromRes8(h3IndexRes8);
-
-    // Insert new poll into valerie.polls
+    // Insert new poll into valerie.polls (inactive until audit claim succeeds when auditId is provided)
     const { data: newPoll, error: pollErr } = await supabase
       .schema("valerie")
       .from("polls")
@@ -357,8 +384,8 @@ Deno.serve(async (req: Request) => {
         question_text: chosenQuestion,
         scope_tier: "LOCAL",
         h3_res7: h3Res7,
-        target_locale_code: h3IndexRes8 ? `h3:${h3IndexRes8}` : null,
-        is_active: true,
+        target_locale_code: `h3:${normalizedH3Res8}`,
+        is_active: auditId ? false : true,
         material_domain: "CIVIC_INFRASTRUCTURE",
         material_consequence_score: 0.8,
         related_ecosystem_refs: {
@@ -375,9 +402,9 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: `Failed to insert poll: ${pollErr?.message}` }, 500);
     }
 
-    // If an audit record was targeted, link the decomposed poll and advance status
+    // If an audit record was targeted, atomically claim decomposed_poll_id IS NULL to prevent concurrent orphans
     if (auditId) {
-      const { error: updateErr } = await supabase
+      const { data: claimedAudit, error: claimErr } = await supabase
         .schema("valerie")
         .from("ad_compliance_audits")
         .update({
@@ -385,13 +412,80 @@ Deno.serve(async (req: Request) => {
           status: "DELIBERATING",
           updated_at: new Date().toISOString(),
         })
-        .eq("id", auditId);
+        .eq("id", auditId)
+        .is("decomposed_poll_id", null)
+        .neq("status", "DISMISSED")
+        .select("id, decomposed_poll_id, status")
+        .maybeSingle();
 
-      if (updateErr) {
-        // Rollback inserted poll to prevent orphaned active records
+      if (claimErr) {
         await supabase.schema("valerie").from("polls").delete().eq("id", newPoll.id);
         return jsonResponse(
-          { error: `Failed to link decomposed poll to audit record: ${updateErr.message}` },
+          { error: `Failed to link decomposed poll to audit record: ${claimErr.message}` },
+          500
+        );
+      }
+
+      if (!claimedAudit) {
+        // Another concurrent request already claimed this audit (or it was dismissed); discard unlinked poll
+        await supabase.schema("valerie").from("polls").delete().eq("id", newPoll.id);
+
+        const { data: latestAudit } = await supabase
+          .schema("valerie")
+          .from("ad_compliance_audits")
+          .select("status, decomposed_poll_id")
+          .eq("id", auditId)
+          .maybeSingle();
+
+        if (latestAudit?.status === "DISMISSED") {
+          return jsonResponse({ error: `Cannot decompose a dismissed audit '${auditId}'` }, 400);
+        }
+
+        if (latestAudit?.decomposed_poll_id) {
+          const { data: existingPoll } = await supabase
+            .schema("valerie")
+            .from("polls")
+            .select("id, question_text, scope_tier, h3_res7, target_locale_code, created_at")
+            .eq("id", latestAudit.decomposed_poll_id)
+            .maybeSingle();
+
+          if (existingPoll) {
+            return jsonResponse({
+              success: true,
+              poll: existingPoll,
+              message: "Audit is already linked to active decomposed poll",
+              status: latestAudit.status,
+            });
+          }
+        }
+
+        return jsonResponse(
+          { error: `Audit '${auditId}' could not be claimed concurrently` },
+          409
+        );
+      }
+
+      // Activate poll only after winning the atomic audit claim
+      const { error: activateErr } = await supabase
+        .schema("valerie")
+        .from("polls")
+        .update({ is_active: true })
+        .eq("id", newPoll.id);
+
+      if (activateErr) {
+        await supabase
+          .schema("valerie")
+          .from("ad_compliance_audits")
+          .update({
+            decomposed_poll_id: null,
+            status: priorAuditStatus || "NORMALIZED",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", auditId)
+          .eq("decomposed_poll_id", newPoll.id);
+        await supabase.schema("valerie").from("polls").delete().eq("id", newPoll.id);
+        return jsonResponse(
+          { error: `Failed to activate decomposed poll: ${activateErr.message}` },
           500
         );
       }
