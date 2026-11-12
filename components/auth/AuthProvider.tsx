@@ -59,6 +59,26 @@ export function AuthProvider({
     }
   }, [initialUserContext])
 
+  // Strip sensitive access/refresh tokens from the browser address bar immediately
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash) {
+      const hash = window.location.hash
+      if (
+        hash.includes("access_token=") ||
+        hash.includes("refresh_token=") ||
+        hash.includes("token_type=")
+      ) {
+        const cleanUrl =
+          window.location.pathname + (window.location.search || "")
+        try {
+          window.history.replaceState(null, "", cleanUrl)
+        } catch {
+          window.location.hash = ""
+        }
+      }
+    }
+  }, [])
+
   const refreshVerification = useCallback(async (): Promise<boolean> => {
     try {
       setIsRefreshing(true)

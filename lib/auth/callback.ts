@@ -51,9 +51,27 @@ export interface ProcessCallbackResult {
 }
 
 /**
+ * Safely strips sensitive credential parameters from URL hash fragments
+ * (e.g. #access_token=... or #refresh_token=...) while preserving UI anchor fragments.
+ */
+export function stripCredentialHash(hash: string): string {
+  if (!hash) return ""
+  if (
+    hash.includes("access_token=") ||
+    hash.includes("refresh_token=") ||
+    hash.includes("token_type=") ||
+    hash.includes("provider_token=")
+  ) {
+    return ""
+  }
+  return hash
+}
+
+/**
  * Safely sanitizes the return_to target URL to prevent open redirect vulnerabilities.
  * Enforces local relative paths starting with / (excluding protocol-relative //)
  * or safe absolute URLs strictly matching the current callback host's cookie apex domain.
+ * Strips sensitive auth token hash fragments (#access_token=...) to avoid token leakage.
  */
 export function sanitizeReturnTo(
   target: string | null | undefined,
@@ -85,7 +103,8 @@ export function sanitizeReturnTo(
     try {
       const parsedLocal = new URL(cleaned, "https://local.check")
       if (parsedLocal.origin === "https://local.check") {
-        const safePath = parsedLocal.pathname + parsedLocal.search + parsedLocal.hash
+        const safeHash = stripCredentialHash(parsedLocal.hash)
+        const safePath = parsedLocal.pathname + parsedLocal.search + safeHash
         if (safePath.startsWith("/") && !safePath.startsWith("//") && !safePath.includes("\\")) {
           return safePath
         }
@@ -109,10 +128,11 @@ export function sanitizeReturnTo(
 
     const parsed = new URL(cleaned, `https://${baseHost}`)
     const destHost = parsed.hostname.toLowerCase()
+    const safeHash = stripCredentialHash(parsed.hash)
 
     // If absolute URL points to the exact same host as baseHost, extract local path
     if (destHost === baseHost) {
-      const safePath = parsed.pathname + parsed.search + parsed.hash
+      const safePath = parsed.pathname + parsed.search + safeHash
       if (safePath.startsWith("/") && !safePath.startsWith("//") && !safePath.includes("\\")) {
         return safePath
       }
@@ -137,10 +157,10 @@ export function sanitizeReturnTo(
       destHost === "127.0.0.1"
 
     if (!isApexOrLocal && (destHost.endsWith(".votary.app") || destHost.endsWith(".sunshade.icu"))) {
-      return parsed.origin + parsed.pathname + parsed.search + parsed.hash
+      return parsed.origin + parsed.pathname + parsed.search + safeHash
     }
 
-    const safePath = parsed.pathname + parsed.search + parsed.hash
+    const safePath = parsed.pathname + parsed.search + safeHash
     if (!safePath.startsWith("/") || safePath.startsWith("//") || safePath.includes("\\")) {
       return "/deliberation"
     }

@@ -63,7 +63,21 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
   // Safely set the return URL on client mount to prevent empty return_to during SSR
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnToUrl(window.location.pathname + window.location.search + window.location.hash)
+      const hasAuthHash =
+        window.location.hash.includes("access_token=") ||
+        window.location.hash.includes("refresh_token=") ||
+        window.location.hash.includes("token_type=")
+      const safeHash = hasAuthHash ? "" : window.location.hash
+      setReturnToUrl(window.location.pathname + window.location.search + safeHash)
+
+      if (hasAuthHash) {
+        const cleanUrl = window.location.pathname + window.location.search
+        try {
+          window.history.replaceState(null, "", cleanUrl)
+        } catch {
+          window.location.hash = ""
+        }
+      }
     }
   }, [])
 
@@ -228,10 +242,22 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/")}`
       : "/auth/callback"
 
-  const currentUrl =
-    typeof window !== "undefined"
-      ? window.location.href
-      : returnToUrl || "/"
+  const currentUrl = (() => {
+    if (typeof window === "undefined") return returnToUrl || "/"
+    try {
+      const parsed = new URL(window.location.href)
+      if (
+        parsed.hash.includes("access_token=") ||
+        parsed.hash.includes("refresh_token=") ||
+        parsed.hash.includes("token_type=")
+      ) {
+        parsed.hash = ""
+      }
+      return parsed.toString()
+    } catch {
+      return returnToUrl || "/"
+    }
+  })()
 
   const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
   const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true&redirectTo=${encodeURIComponent(currentUrl)}`
