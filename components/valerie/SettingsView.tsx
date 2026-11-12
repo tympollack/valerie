@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import {
   ShieldCheck,
   ShieldAlert,
+  Shield,
+  Activity,
   User,
   Key,
   LogOut,
@@ -23,6 +25,7 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type UserContext, signOutAction } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/client"
+import { siteConfig } from "@/config/site"
 import { cn } from "@/lib/utils"
 
 interface SettingsViewProps {
@@ -74,8 +77,13 @@ export function SettingsView({ userContext }: SettingsViewProps) {
       ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/settings")}`
       : "/auth/callback"
 
+  const currentUrl =
+    typeof window !== "undefined"
+      ? window.location.href
+      : returnToUrl || "/settings"
+
   const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
-  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true`
+  const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true&redirectTo=${encodeURIComponent(currentUrl)}`
 
   return (
     <div className="space-y-6">
@@ -392,6 +400,52 @@ export function SettingsView({ userContext }: SettingsViewProps) {
             </div>
             <ExternalLink className="ml-2 h-4 w-4 shrink-0 text-slate-500" />
           </a>
+        </div>
+      </div>
+
+      {/* ── 4. System Diagnostics & Telemetry ─────────────────────────────── */}
+      <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+          <Activity className="h-4 w-4 text-cyan-400" />
+          <span>System Diagnostics &amp; Deliberation Telemetry</span>
+        </h3>
+
+        <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-3">
+          <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-3.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 bg-slate-800/80 font-mono text-xs font-bold text-cyan-400">
+              V
+            </div>
+            <div>
+              <p className="font-semibold text-slate-100">Telemetry Kernel</p>
+              <p className="font-mono text-[11px] text-slate-400">
+                {siteConfig.telemetry.kernel}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-3.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-500/30 bg-cyan-950/60 text-cyan-400">
+              <Shield className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-100">Anti-Bandwagoning</p>
+              <p className="text-[11px] text-slate-400">
+                Consensus protection active
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-3.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-950/60 text-emerald-400">
+              <Activity className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="font-semibold text-slate-100">SHA-256 AI Attestation</p>
+              <p className="text-[11px] text-slate-400">
+                Cryptographic attestation online
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>

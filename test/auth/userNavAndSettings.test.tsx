@@ -92,7 +92,7 @@ describe("UserNav Component", () => {
     render(<UserNav initialUserContext={unverifiedContext} />)
 
     expect(screen.getByText(/Bob Smith/i)).toBeInTheDocument()
-    expect(screen.getByText("Unverified")).toBeInTheDocument()
+    expect(screen.getByText("Setup Needed")).toBeInTheDocument()
   })
 
   it("preserves SSR authenticated identity when onAuthStateChange emits initial null session", () => {
@@ -145,7 +145,7 @@ describe("UserNav Component", () => {
     })
 
     expect(screen.getByText(/Bob Smith/i)).toBeInTheDocument()
-    expect(screen.getByText("Unverified")).toBeInTheDocument()
+    expect(screen.getByText("Setup Needed")).toBeInTheDocument()
     expect(screen.queryByText(/Verified Human/i)).not.toBeInTheDocument()
   })
 
