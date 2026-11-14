@@ -304,4 +304,22 @@ describe("TASK-VAL-VERIFY-UI-WCAG-SPACE: De-Cramp Menu, Contrast & Inline Gate",
     expect(inlineCta[0]).toHaveClass("bg-amber-400")
     expect(inlineCta[0]).toHaveClass("text-slate-950")
   })
+
+  it("sanitizes plaintext access_token and refresh_token from window.location.hash on client mount", () => {
+    const replaceStateSpy = vi.spyOn(window.history, "replaceState").mockImplementation(() => {})
+    window.location.hash = "#access_token=eyJhbGciOiJFUzI1Ni...&refresh_token=refresh_secret&token_type=bearer"
+
+    render(
+      <AuthProvider initialUserContext={unverifiedContext}>
+        <div>Deliberation Protected</div>
+      </AuthProvider>
+    )
+
+    expect(replaceStateSpy).toHaveBeenCalledWith(
+      null,
+      "",
+      window.location.pathname + (window.location.search || "")
+    )
+    replaceStateSpy.mockRestore()
+  })
 })

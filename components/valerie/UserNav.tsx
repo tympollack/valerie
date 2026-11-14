@@ -63,7 +63,21 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
   // Safely set the return URL on client mount to prevent empty return_to during SSR
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnToUrl(window.location.pathname + window.location.search + window.location.hash)
+      const hasAuthHash =
+        window.location.hash.includes("access_token=") ||
+        window.location.hash.includes("refresh_token=") ||
+        window.location.hash.includes("token_type=")
+      const safeHash = hasAuthHash ? "" : window.location.hash
+      setReturnToUrl(window.location.pathname + window.location.search + safeHash)
+
+      if (hasAuthHash) {
+        const cleanUrl = window.location.pathname + window.location.search
+        try {
+          window.history.replaceState(null, "", cleanUrl)
+        } catch {
+          window.location.hash = ""
+        }
+      }
     }
   }, [])
 
@@ -82,17 +96,18 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
 
         let isVerified = false
         if (user) {
+          const freshProof = extractVerificationProof(user)
+
           try {
             const { data: rpcRes, error: rpcErr } = await supabase.rpc(
               "is_human_verified",
               { p_user_id: user.id }
             )
             if (!rpcErr && typeof rpcRes === "boolean") {
-              isVerified = rpcRes
+              isVerified = rpcRes && freshProof.trustState === "active"
             }
           } catch {}
 
-          const freshProof = extractVerificationProof(user)
           if (freshProof.isHuman && freshProof.trustState === "active") {
             isVerified = true
           }
@@ -228,10 +243,22 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       ? `${window.location.origin}/auth/callback?return_to=${encodeURIComponent(returnToUrl || "/")}`
       : "/auth/callback"
 
-  const currentUrl =
-    typeof window !== "undefined"
-      ? window.location.href
-      : returnToUrl || "/"
+  const currentUrl = (() => {
+    if (typeof window === "undefined") return returnToUrl || "/"
+    try {
+      const parsed = new URL(window.location.href)
+      if (
+        parsed.hash.includes("access_token=") ||
+        parsed.hash.includes("refresh_token=") ||
+        parsed.hash.includes("token_type=")
+      ) {
+        parsed.hash = ""
+      }
+      return parsed.toString()
+    } catch {
+      return returnToUrl || "/"
+    }
+  })()
 
   const loginUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}`
   const verifyUrl = `${hubBaseUrl}/login?redirect=${encodeURIComponent(callbackUrl)}&verify=true&redirectTo=${encodeURIComponent(currentUrl)}`
@@ -350,7 +377,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
                 {userContext.isHumanVerified ? (
                   <>
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Single-Human Verified</span>
+                    <span>Identity Confirmed</span>
                   </>
                 ) : (
                   <>
@@ -379,8 +406,8 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
                     <span className="font-semibold text-emerald-300">
                       Voting Rights Active:
                     </span>{" "}
-                    Your account has passed single-human proof. You are eligible
-                    to commit sealed bivariate votes.
+                    Your account is confirmed. You are eligible to submit
+                    community ballots.
                   </div>
                 </>
               ) : (

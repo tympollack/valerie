@@ -48,6 +48,9 @@ export default function AuthCallbackPage() {
 
       if (result.success && result.destination) {
         setStatus("verified")
+        try {
+          window.history.replaceState(null, "", window.location.pathname)
+        } catch {}
         window.location.replace(result.destination)
       } else {
         setStatus("error")

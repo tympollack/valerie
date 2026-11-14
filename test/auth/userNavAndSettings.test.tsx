@@ -167,7 +167,7 @@ describe("UserNav Component", () => {
     fireEvent.click(trigger)
 
     // Verify popover menu items
-    expect(screen.getByText(/Single-Human Verified/i)).toBeInTheDocument()
+    expect(screen.getByText(/Identity Confirmed/i)).toBeInTheDocument()
     expect(screen.getByText(/Voting Rights Active/i)).toBeInTheDocument()
     expect(screen.getByText(/Account & Settings/i)).toBeInTheDocument()
 

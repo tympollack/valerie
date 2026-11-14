@@ -68,7 +68,7 @@ export async function getCurrentUserContext(): Promise<UserContext> {
             { p_user_id: resolvedUser.id }
           )
           if (!rpcErr && typeof rpcRes === "boolean") {
-            isHumanVerified = rpcRes
+            isHumanVerified = rpcRes && proof.trustState === "active"
           }
         } catch {
           // Non-blocking fallback to extracted proof
