@@ -273,6 +273,42 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
     })
   })
 
+  it("hydrates session and forwards refreshed tokens returned by setSession to persistServerSession", async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const staleToken = createTestJWT({
+      sub: "usr-citizen-42",
+      exp: now - 60,
+    })
+    const freshToken = createTestJWT({
+      sub: "usr-citizen-42",
+      exp: now + 3600,
+      user_metadata: { is_human_verified: true },
+      app_metadata: { verification_tier: "ANCHOR", trust_state: "active" },
+    })
+
+    mockSetSession.mockResolvedValueOnce({
+      data: {
+        session: {
+          access_token: freshToken,
+          refresh_token: "rotated_refresh_999",
+        },
+      },
+      error: null,
+    })
+
+    window.location.hash = `#access_token=${staleToken}&refresh_token=old_refresh_111`
+
+    render(<AuthCallbackPage />)
+
+    await waitFor(() => {
+      expect(mockHydrateSessionAction).toHaveBeenCalledWith(
+        freshToken,
+        "rotated_refresh_999"
+      )
+      expect(mockReplace).toHaveBeenCalledWith("/deliberation")
+    })
+  })
+
   it("displays error card when server session hydration rejects token", async () => {
     mockHydrateSessionAction.mockResolvedValueOnce({
       success: false,

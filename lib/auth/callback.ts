@@ -37,7 +37,7 @@ export interface ProcessCallbackParams {
   search: string
   hostname: string
   exchangeCode?: (code: string) => Promise<{ access_token: string; refresh_token?: string } | null>
-  setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<void>
+  setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<{ access_token?: string; refresh_token?: string } | void | null>
   persistServerSession: (
     accessToken: string,
     refreshToken?: string | null
@@ -198,9 +198,11 @@ export function parseCallbackTokens(
     hashParams.get("return_to") ||
     hashParams.get("redirect") ||
     hashParams.get("state") ||
+    hashParams.get("next") ||
     queryParams.get("return_to") ||
     queryParams.get("redirect") ||
     queryParams.get("state") ||
+    queryParams.get("next") ||
     "/deliberation"
 
   const returnTo = sanitizeReturnTo(rawReturnTo, hostname)
@@ -331,10 +333,18 @@ export async function processCallbackAuthentication({
 
   if (setSession) {
     try {
-      await setSession({
+      const updatedSession = await setSession({
         access_token: activeAccessToken,
         refresh_token: activeRefreshToken || undefined,
       })
+      if (updatedSession && typeof updatedSession === "object") {
+        if (updatedSession.access_token) {
+          activeAccessToken = updatedSession.access_token
+        }
+        if (updatedSession.refresh_token) {
+          activeRefreshToken = updatedSession.refresh_token
+        }
+      }
     } catch {
       // Non-blocking client fallback
     }

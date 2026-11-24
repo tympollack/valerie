@@ -36,7 +36,13 @@ export default function AuthCallbackPage() {
         setSession: async ({ access_token, refresh_token }) => {
           const supabase = createClient()
           if (refresh_token) {
-            await supabase.auth.setSession({ access_token, refresh_token })
+            const { data } = await supabase.auth.setSession({ access_token, refresh_token })
+            if (data?.session) {
+              return {
+                access_token: data.session.access_token,
+                refresh_token: data.session.refresh_token,
+              }
+            }
           }
         },
         persistServerSession: async (accessToken, refreshToken) => {
