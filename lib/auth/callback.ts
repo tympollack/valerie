@@ -37,7 +37,7 @@ export interface ProcessCallbackParams {
   search: string
   hostname: string
   exchangeCode?: (code: string) => Promise<{ access_token: string; refresh_token?: string } | null>
-  setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<void>
+  setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<{ access_token?: string; refresh_token?: string } | void | null>
   persistServerSession: (
     accessToken: string,
     refreshToken?: string | null
@@ -193,13 +193,15 @@ export function parseCallbackTokens(
   const refreshToken = hashParams.get("refresh_token") || null
   const code = queryParams.get("code") || hashParams.get("code") || null
 
-  // Target redirect destination
+  // Target redirect destination (check explicit next before opaque OAuth state)
   const rawReturnTo =
     hashParams.get("return_to") ||
     hashParams.get("redirect") ||
+    hashParams.get("next") ||
     hashParams.get("state") ||
     queryParams.get("return_to") ||
     queryParams.get("redirect") ||
+    queryParams.get("next") ||
     queryParams.get("state") ||
     "/deliberation"
 
@@ -291,6 +293,30 @@ export function getClientCookieStrings(
 }
 
 /**
+ * Expires any legacy host-only or domain-scoped Supabase auth cookies in document.cookie
+ * so browser refreshes and server requests never read split cookie scopes.
+ */
+export function clearBrowserSupabaseCookies(hostname: string = "votary.app"): void {
+  if (typeof document === "undefined" || !document.cookie) return
+
+  const cookieOpts = getCrossDomainCookieOptions(hostname)
+  const isHttps = typeof window !== "undefined" ? window.location.protocol === "https:" : true
+  const securePart = isHttps ? "; Secure" : ""
+
+  const names = document.cookie
+    .split("; ")
+    .map((chunk) => chunk.split("=")[0]?.trim())
+    .filter((name): name is string => Boolean(name && name.startsWith("sb-") && name.includes("-auth-token")))
+
+  for (const name of names) {
+    document.cookie = `${name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax${securePart}`
+    if (cookieOpts.domain) {
+      document.cookie = `${name}=; Path=/; domain=${cookieOpts.domain}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax${securePart}`
+    }
+  }
+}
+
+/**
  * Orchestrates full cross-domain session hydration pipeline.
  */
 export async function processCallbackAuthentication({
@@ -329,12 +355,22 @@ export async function processCallbackAuthentication({
 
   verifyAntiSybilClaim(activeAccessToken)
 
+  clearBrowserSupabaseCookies(hostname)
+
   if (setSession) {
     try {
-      await setSession({
+      const updatedSession = await setSession({
         access_token: activeAccessToken,
         refresh_token: activeRefreshToken || undefined,
       })
+      if (updatedSession && typeof updatedSession === "object") {
+        if (updatedSession.access_token) {
+          activeAccessToken = updatedSession.access_token
+        }
+        if (updatedSession.refresh_token) {
+          activeRefreshToken = updatedSession.refresh_token
+        }
+      }
     } catch {
       // Non-blocking client fallback
     }

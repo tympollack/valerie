@@ -13,7 +13,6 @@ import { createClient } from "@/lib/supabase/client"
 import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
 import {
   type UserContext,
-  getCurrentUserContext,
   revalidateUserContextAction,
 } from "@/app/actions/auth"
 
