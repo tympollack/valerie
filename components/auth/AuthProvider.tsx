@@ -10,15 +10,9 @@ import React, {
 } from "react"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
-import {
-  decodeJWT,
-  extractAntiSybilProof,
-  extractVerificationProof,
-} from "@/lib/auth/ssoHandshake"
-import { processCallbackAuthentication } from "@/lib/auth/callback"
+import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
 import {
   type UserContext,
-  hydrateSessionAction,
   revalidateUserContextAction,
 } from "@/app/actions/auth"
 
@@ -57,108 +51,12 @@ export function AuthProvider({
   const [isRefreshing, setIsRefreshing] = useState(false)
   const userContextRef = useRef(userContext)
   userContextRef.current = userContext
-  const hashHydratedRef = useRef(false)
 
   useEffect(() => {
     if (initialUserContext) {
       setUserContext(initialUserContext)
     }
   }, [initialUserContext])
-
-  // Hydrate cross-domain SSO fragment tokens (#access_token=...&refresh_token=...)
-  // when redirected directly to any route (e.g. /, /deliberation, /settings) instead of /auth/callback.
-  useEffect(() => {
-    if (hashHydratedRef.current) return
-    if (typeof window === "undefined") return
-    if (window.location.pathname === "/auth/callback") return
-    if (!window.location.hash || !window.location.hash.includes("access_token=")) return
-
-    hashHydratedRef.current = true
-    const rawHash = window.location.hash
-    const rawSearch = window.location.search
-    const hostname = window.location.hostname
-
-    // Clean sensitive tokens from URL fragment immediately
-    try {
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + window.location.search
-      )
-    } catch {
-      // Non-blocking in restricted history contexts
-    }
-
-    async function hydrateFromFragment() {
-      let hydratedAccessToken: string | null = null
-      const result = await processCallbackAuthentication({
-        hash: rawHash,
-        search: rawSearch,
-        hostname,
-        setSession: async ({ access_token, refresh_token }) => {
-          hydratedAccessToken = access_token
-          const supabase = createClient()
-          if (refresh_token) {
-            const { data } = await supabase.auth.setSession({
-              access_token,
-              refresh_token,
-            })
-            if (data?.session) {
-              hydratedAccessToken = data.session.access_token
-              return {
-                access_token: data.session.access_token,
-                refresh_token: data.session.refresh_token,
-              }
-            }
-          }
-        },
-        persistServerSession: async (accessToken, refreshToken) => {
-          hydratedAccessToken = accessToken
-          return await hydrateSessionAction(accessToken, refreshToken)
-        },
-      })
-
-      if (!result.success) return
-
-      let resolvedContext: UserContext | null = null
-      try {
-        const serverContext = await revalidateUserContextAction()
-        if (serverContext?.authenticated) {
-          resolvedContext = serverContext
-        }
-      } catch {
-        // Fallback to decoded token claims below
-      }
-
-      if (!resolvedContext && hydratedAccessToken) {
-        const payload = decodeJWT(hydratedAccessToken)
-        const userId = payload?.sub || payload?.id || payload?.user_id || null
-        if (userId) {
-          const proof = extractAntiSybilProof(payload)
-          const email = typeof payload?.email === "string" ? payload.email : null
-          resolvedContext = {
-            authenticated: true,
-            userId,
-            email,
-            displayName: email ? email.split("@")[0] : null,
-            isHumanVerified: Boolean(proof.isHuman && proof.trustState === "active"),
-            verificationTier: proof.verificationTier,
-            trustState: proof.trustState,
-            nullifierHash: proof.nullifierHash,
-            provider: proof.provider,
-            score: proof.score,
-          }
-        }
-      }
-
-      if (resolvedContext) {
-        setUserContext(resolvedContext)
-        router.refresh()
-      }
-    }
-
-    void hydrateFromFragment()
-  }, [router])
 
   const refreshVerification = useCallback(async (): Promise<boolean> => {
     try {

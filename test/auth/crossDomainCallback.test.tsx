@@ -6,6 +6,7 @@ import {
   verifyAntiSybilClaim,
   getClientCookieStrings,
   sanitizeReturnTo,
+  clearBrowserSupabaseCookies,
 } from "@/lib/auth/callback"
 import { hydrateSessionAction } from "@/app/actions/auth"
 
@@ -124,6 +125,13 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(tokens.returnTo).toBe("/deliberation")
     })
 
+    it("prefers next destination over opaque OAuth state parameter", () => {
+      const search = "?state=opaque_csrf_nonce&next=%2Fpoll%2F123"
+      const tokens = parseCallbackTokens("", search)
+
+      expect(tokens.returnTo).toBe("/poll/123")
+    })
+
     it("captures OAuth error parameters cleanly", () => {
       const hash = "#error=access_denied&error_description=User+cancelled+verification"
       const tokens = parseCallbackTokens(hash, "")
@@ -205,6 +213,33 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       const cookies = getClientCookieStrings("mock_token_123", null, "deliberation.votary.app")
 
       expect(cookies.some((c) => c.includes("domain=.votary.app"))).toBe(true)
+    })
+  })
+
+  describe("clearBrowserSupabaseCookies", () => {
+    it("expires legacy host-only and domain-scoped sb-*-auth-token cookies on votary.app", () => {
+      const writes: string[] = []
+      const cookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie")
+      Object.defineProperty(document, "cookie", {
+        configurable: true,
+        get: () => "sb-proj-auth-token=old; sb-proj-auth-token.0=chunk0; theme=dark",
+        set: (val: string) => {
+          writes.push(val)
+        },
+      })
+
+      try {
+        clearBrowserSupabaseCookies("votary.app")
+      } finally {
+        if (cookieDescriptor) {
+          Object.defineProperty(document, "cookie", cookieDescriptor)
+        }
+      }
+
+      expect(writes.some((w) => w.startsWith("sb-proj-auth-token=; Path=/; Max-Age=0") && !w.includes("domain="))).toBe(true)
+      expect(writes.some((w) => w.startsWith("sb-proj-auth-token=; Path=/; domain=.votary.app; Max-Age=0"))).toBe(true)
+      expect(writes.some((w) => w.startsWith("sb-proj-auth-token.0=; Path=/; Max-Age=0"))).toBe(true)
+      expect(writes.some((w) => w.startsWith("theme="))).toBe(false)
     })
   })
 })

@@ -187,39 +187,7 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
     })
   })
 
-  it("AuthProvider hydrates #access_token fragment directly on non-callback routes and syncs UserNav", async () => {
-    const payload = Buffer.from(
-      JSON.stringify({
-        sub: "usr-fragment-1",
-        email: "fragment@sunshade.icu",
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        app_metadata: { is_human: true, verification_tier: "ANCHOR", trust_state: "active" },
-      })
-    ).toString("base64url")
-    const token = `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`
-
-    mockRevalidateUserContextAction.mockResolvedValueOnce({
-      authenticated: true,
-      userId: "usr-fragment-1",
-      email: "fragment@sunshade.icu",
-      displayName: "Fragment Citizen",
-      isHumanVerified: true,
-      verificationTier: "ANCHOR",
-      trustState: "active",
-    })
-
-    const originalLocation = window.location
-    const replaceStateSpy = vi.spyOn(window.history, "replaceState").mockImplementation(() => {})
-    delete (window as any).location
-    window.location = {
-      ...originalLocation,
-      pathname: "/",
-      search: "",
-      hostname: "votary.app",
-      protocol: "https:",
-      hash: `#access_token=${token}&refresh_token=refresh_fragment_123`,
-    } as any
-
+  it("AuthProvider syncs UserMenu immediately when onAuthStateChange signs in a verified citizen", async () => {
     const unauthContext: UserContext = {
       authenticated: false,
       userId: null,
@@ -230,27 +198,29 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
       trustState: "active",
     }
 
-    try {
-      render(
-        <AuthProvider initialUserContext={unauthContext}>
-          <UserMenu initialUserContext={unauthContext} />
-        </AuthProvider>
-      )
+    render(
+      <AuthProvider initialUserContext={unauthContext}>
+        <UserMenu initialUserContext={unauthContext} />
+      </AuthProvider>
+    )
 
-      await waitFor(() => {
-        expect(mockSetSession).toHaveBeenCalledWith({
-          access_token: token,
-          refresh_token: "refresh_fragment_123",
-        })
-        expect(mockHydrateSessionAction).toHaveBeenCalledWith(token, "refresh_fragment_123")
-        expect(screen.getByText(/Fragment Citizen/i)).toBeInTheDocument()
-        expect(screen.getByText(/Verified Human/i)).toBeInTheDocument()
+    expect(screen.getByText(/Sign In/i)).toBeInTheDocument()
+
+    act(() => {
+      authCallback?.("SIGNED_IN", {
+        user: {
+          id: "usr-sync-citizen-1",
+          email: "citizen@sunshade.icu",
+          user_metadata: { full_name: "Synced Citizen" },
+          app_metadata: { is_human: true, verification_tier: "ANCHOR", trust_state: "active" },
+        },
       })
-      expect(replaceStateSpy).toHaveBeenCalled()
-    } finally {
-      replaceStateSpy.mockRestore()
-      window.location = originalLocation as any
-    }
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/Synced Citizen/i)).toBeInTheDocument()
+      expect(screen.getByText(/Verified Human/i)).toBeInTheDocument()
+    })
   })
 })
 
