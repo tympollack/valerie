@@ -12,6 +12,7 @@ import {
 } from "@/lib/auth/ssoHandshake"
 import { cookies, headers } from "next/headers"
 import { revalidatePath } from "next/cache"
+import { cache } from "react"
 
 export interface UserContext {
   authenticated: boolean
@@ -27,9 +28,10 @@ export interface UserContext {
 }
 
 /**
- * Resolves current user session and Anti-Sybil verification status from Supabase and headers.
+ * Per-request memoized user session and Anti-Sybil verification resolver.
+ * Deduplicates calls shared between RootLayout and page Server Components within one render pass.
  */
-export async function getCurrentUserContext(): Promise<UserContext> {
+const resolveCurrentUserContext = cache(async (): Promise<UserContext> => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
@@ -135,6 +137,13 @@ export async function getCurrentUserContext(): Promise<UserContext> {
     verificationTier: "UNVERIFIED",
     trustState: "active",
   }
+})
+
+/**
+ * Resolves current user session and Anti-Sybil verification status from Supabase and headers.
+ */
+export async function getCurrentUserContext(): Promise<UserContext> {
+  return resolveCurrentUserContext()
 }
 
 /**

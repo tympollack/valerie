@@ -176,6 +176,38 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
       expect(screen.getByText("Verified Human")).toBeInTheDocument()
     })
   })
+
+  it("AuthProvider does not trigger verification round trips on focus or visibilitychange for unauthenticated guests", async () => {
+    const guestContext: UserContext = {
+      authenticated: false,
+      userId: null,
+      email: null,
+      displayName: null,
+      isHumanVerified: false,
+      verificationTier: "UNVERIFIED",
+      trustState: "active",
+    }
+
+    render(
+      <AuthProvider initialUserContext={guestContext}>
+        <div>Guest View</div>
+      </AuthProvider>
+    )
+
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    })
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+
+    expect(mockRefreshSession).not.toHaveBeenCalled()
+    expect(mockGetUser).not.toHaveBeenCalled()
+  })
 })
 
 describe("TASK-VAL-VERIFY-COPY-PAP-TEST: Plain-Language Civic Copy", () => {

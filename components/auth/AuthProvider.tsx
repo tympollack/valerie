@@ -180,14 +180,14 @@ export function AuthProvider({
   useEffect(() => {
     const handleSync = () => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        if (!userContextRef.current.isHumanVerified) {
+        if (userContextRef.current.authenticated && !userContextRef.current.isHumanVerified) {
           refreshVerification()
         }
       }
     }
 
     const handleFocus = () => {
-      if (!userContextRef.current.isHumanVerified) {
+      if (userContextRef.current.authenticated && !userContextRef.current.isHumanVerified) {
         refreshVerification()
       }
     }
