@@ -186,10 +186,12 @@ export async function signOutAction(): Promise<{ success: boolean }> {
   // Clear Supabase auth cookies
   for (const cookie of cookieStore.getAll()) {
     if (cookie.name.startsWith("sb-")) {
+      const isSbAuth = cookie.name.includes("-auth-token")
       try {
         cookieStore.delete(cookie.name)
         cookieStore.set(cookie.name, "", {
           ...cookieDomainOpts,
+          ...(isSbAuth ? { httpOnly: false } : {}),
           maxAge: 0,
           expires: new Date(0),
         })
@@ -207,6 +209,8 @@ export interface HydrateSessionResult {
   success: boolean
   userId: string | null
   isHumanVerified: boolean
+  accessToken?: string
+  refreshToken?: string | null
   error?: string
 }
 
@@ -236,29 +240,61 @@ export async function hydrateSessionAction(
     }
   }
 
-  // Verify token expiry
+  let effectiveAccessToken = accessToken
+  let effectiveRefreshToken = refreshToken ?? null
+
+  // Verify token expiry (attempt server refresh if expired and refreshToken is present)
   const nowSec = Math.floor(Date.now() / 1000)
-  if (typeof payload.exp === "number" && payload.exp < nowSec) {
-    return {
-      success: false,
-      userId: null,
-      isHumanVerified: false,
-      error: "Access token has expired",
-    }
-  }
+  const isExpired = typeof payload.exp === "number" && payload.exp < nowSec
 
   let verifiedUser: { id: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> } | null = null
 
   // Cryptographically verify token with Supabase Auth when configured
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (supabaseUrl && supabaseKey) {
+
+  if (isExpired) {
+    if (supabaseUrl && supabaseKey && effectiveRefreshToken) {
+      try {
+        const supabase = await createClient()
+        const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession({
+          refresh_token: effectiveRefreshToken,
+        })
+        if (!refreshErr && refreshed?.session?.access_token && refreshed.user) {
+          effectiveAccessToken = refreshed.session.access_token
+          effectiveRefreshToken = refreshed.session.refresh_token ?? effectiveRefreshToken
+          verifiedUser = refreshed.user
+        } else {
+          return {
+            success: false,
+            userId: null,
+            isHumanVerified: false,
+            error: "Access token has expired",
+          }
+        }
+      } catch {
+        return {
+          success: false,
+          userId: null,
+          isHumanVerified: false,
+          error: "Access token has expired",
+        }
+      }
+    } else {
+      return {
+        success: false,
+        userId: null,
+        isHumanVerified: false,
+        error: "Access token has expired",
+      }
+    }
+  } else if (supabaseUrl && supabaseKey) {
     try {
-      const supabase = await createClient(accessToken)
+      const supabase = await createClient(effectiveAccessToken)
       const {
         data: { user },
         error: userErr,
-      } = await supabase.auth.getUser(accessToken)
+      } = await supabase.auth.getUser(effectiveAccessToken)
 
       if (userErr || !user) {
         return {
@@ -281,11 +317,14 @@ export async function hydrateSessionAction(
     }
   }
 
+  const effectivePayload = decodeJWT(effectiveAccessToken) || payload
   // Derive verification claims from cryptographically verified user or decoded payload
-  const proof = extractAntiSybilProof(verifiedUser || payload)
+  const proof = extractAntiSybilProof(verifiedUser || effectivePayload)
   // Hard Gate: trust state MUST be active for human verification
   const isHumanVerified = Boolean(proof.isHuman && proof.trustState === "active")
-  const userId = verifiedUser ? verifiedUser.id : (payload.sub || payload.id || payload.user_id || null)
+  const userId = verifiedUser
+    ? verifiedUser.id
+    : effectivePayload.sub || effectivePayload.id || effectivePayload.user_id || null
 
   const cookieStore = await cookies()
   const headerList = await headers()
@@ -302,6 +341,7 @@ export async function hydrateSessionAction(
           cookieStore.delete(c.name)
           cookieStore.set(c.name, "", {
             ...cookieDomainOpts,
+            httpOnly: false,
             maxAge: 0,
             expires: new Date(0),
           })
@@ -311,21 +351,21 @@ export async function hydrateSessionAction(
       }
     }
 
-    cookieStore.set("sunshade_sso", accessToken, {
+    cookieStore.set("sunshade_sso", effectiveAccessToken, {
       ...cookieDomainOpts,
       maxAge: cookieMaxAge,
     })
-    cookieStore.set("sunshade_sso_token", accessToken, {
+    cookieStore.set("sunshade_sso_token", effectiveAccessToken, {
       ...cookieDomainOpts,
       maxAge: cookieMaxAge,
     })
-    cookieStore.set("sb-access-token", accessToken, {
+    cookieStore.set("sb-access-token", effectiveAccessToken, {
       ...cookieDomainOpts,
       maxAge: cookieMaxAge,
     })
 
-    if (refreshToken) {
-      cookieStore.set("sb-refresh-token", refreshToken, {
+    if (effectiveRefreshToken) {
+      cookieStore.set("sb-refresh-token", effectiveRefreshToken, {
         ...cookieDomainOpts,
         maxAge: cookieMaxAge,
       })
@@ -333,11 +373,11 @@ export async function hydrateSessionAction(
 
     // Also hydrate native Supabase SSR client session
     if (supabaseUrl && supabaseKey) {
-      const supabase = await createClient(accessToken)
-      if (refreshToken) {
+      const supabase = await createClient(effectiveAccessToken)
+      if (effectiveRefreshToken) {
         await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
+          access_token: effectiveAccessToken,
+          refresh_token: effectiveRefreshToken,
         })
       }
     }
@@ -350,6 +390,8 @@ export async function hydrateSessionAction(
     success: true,
     userId,
     isHumanVerified,
+    accessToken: effectiveAccessToken,
+    refreshToken: effectiveRefreshToken,
   }
 }
 

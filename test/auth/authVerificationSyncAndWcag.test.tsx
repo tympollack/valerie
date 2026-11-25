@@ -254,6 +254,31 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
       expect(screen.getByText(/Verified Human/i)).toBeInTheDocument()
     })
   })
+
+  it("does not trigger duplicate focus revalidation requests when UserMenu is inside AuthProvider", async () => {
+    const unverifiedContext: UserContext = {
+      authenticated: true,
+      userId: "usr-dedup-1",
+      email: "dedup@sunshade.icu",
+      displayName: "Dedup User",
+      isHumanVerified: false,
+      verificationTier: "UNVERIFIED",
+      trustState: "active",
+    }
+
+    render(
+      <AuthProvider initialUserContext={unverifiedContext}>
+        <UserMenu initialUserContext={unverifiedContext} />
+      </AuthProvider>
+    )
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    expect(mockRefreshSession).toHaveBeenCalledTimes(1)
+    expect(mockRevalidateUserContextAction).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("TASK-VAL-VERIFY-COPY-PAP-TEST: Plain-Language Civic Copy", () => {
