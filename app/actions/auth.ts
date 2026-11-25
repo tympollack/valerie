@@ -39,7 +39,7 @@ const resolveCurrentUserContext = cache(async (): Promise<UserContext> => {
     try {
       const cookieStore = await cookies()
       const ssoToken = extractSSOToken(cookieStore)
-      const supabase = await createClient(ssoToken)
+      let supabase = await createClient()
       let resolvedUser = null
 
       const {
@@ -50,12 +50,14 @@ const resolveCurrentUserContext = cache(async (): Promise<UserContext> => {
       if (!userErr && user) {
         resolvedUser = user
       } else if (ssoToken) {
+        const ssoClient = await createClient(ssoToken)
         const {
           data: ssoData,
           error: ssoErr,
-        } = await supabase.auth.getUser(ssoToken)
+        } = await ssoClient.auth.getUser(ssoToken)
         if (!ssoErr && ssoData?.user) {
           resolvedUser = ssoData.user
+          supabase = ssoClient
         }
       }
 

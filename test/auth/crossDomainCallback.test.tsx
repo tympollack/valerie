@@ -6,6 +6,7 @@ import {
   verifyAntiSybilClaim,
   getClientCookieStrings,
   sanitizeReturnTo,
+  clearBrowserSupabaseCookies,
 } from "@/lib/auth/callback"
 import { hydrateSessionAction } from "@/app/actions/auth"
 
@@ -124,6 +125,13 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(tokens.returnTo).toBe("/deliberation")
     })
 
+    it("prefers next destination over opaque OAuth state parameter", () => {
+      const search = "?state=opaque_csrf_nonce&next=%2Fpoll%2F123"
+      const tokens = parseCallbackTokens("", search)
+
+      expect(tokens.returnTo).toBe("/poll/123")
+    })
+
     it("captures OAuth error parameters cleanly", () => {
       const hash = "#error=access_denied&error_description=User+cancelled+verification"
       const tokens = parseCallbackTokens(hash, "")
@@ -221,6 +229,33 @@ describe("Cross-Domain Hub Callback Token Processing (lib/auth/callback.ts)", ()
       expect(cookies.some((c) => c.includes("domain=.votary.app"))).toBe(true)
     })
   })
+
+  describe("clearBrowserSupabaseCookies", () => {
+    it("expires legacy host-only and domain-scoped sb-*-auth-token cookies on votary.app", () => {
+      const writes: string[] = []
+      const cookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie")
+      Object.defineProperty(document, "cookie", {
+        configurable: true,
+        get: () => "sb-proj-auth-token=old; sb-proj-auth-token.0=chunk0; theme=dark",
+        set: (val: string) => {
+          writes.push(val)
+        },
+      })
+
+      try {
+        clearBrowserSupabaseCookies("votary.app")
+      } finally {
+        if (cookieDescriptor) {
+          Object.defineProperty(document, "cookie", cookieDescriptor)
+        }
+      }
+
+      expect(writes.some((w) => w.startsWith("sb-proj-auth-token=; Path=/; Max-Age=0") && !w.includes("domain="))).toBe(true)
+      expect(writes.some((w) => w.startsWith("sb-proj-auth-token=; Path=/; domain=.votary.app; Max-Age=0"))).toBe(true)
+      expect(writes.some((w) => w.startsWith("sb-proj-auth-token.0=; Path=/; Max-Age=0"))).toBe(true)
+      expect(writes.some((w) => w.startsWith("theme="))).toBe(false)
+    })
+  })
 })
 
 describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
@@ -284,6 +319,42 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
       expect(screen.getByText(/Authentication Incomplete/i)).toBeInTheDocument()
       expect(screen.getByText(/Verification denied by user/i)).toBeInTheDocument()
       expect(screen.getByRole("link", { name: /Return to Deliberation/i })).toBeInTheDocument()
+    })
+  })
+
+  it("hydrates session and forwards refreshed tokens returned by setSession to persistServerSession", async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const staleToken = createTestJWT({
+      sub: "usr-citizen-42",
+      exp: now - 60,
+    })
+    const freshToken = createTestJWT({
+      sub: "usr-citizen-42",
+      exp: now + 3600,
+      user_metadata: { is_human_verified: true },
+      app_metadata: { verification_tier: "ANCHOR", trust_state: "active" },
+    })
+
+    mockSetSession.mockResolvedValueOnce({
+      data: {
+        session: {
+          access_token: freshToken,
+          refresh_token: "rotated_refresh_999",
+        },
+      },
+      error: null,
+    })
+
+    window.location.hash = `#access_token=${staleToken}&refresh_token=old_refresh_111`
+
+    render(<AuthCallbackPage />)
+
+    await waitFor(() => {
+      expect(mockHydrateSessionAction).toHaveBeenCalledWith(
+        freshToken,
+        "rotated_refresh_999"
+      )
+      expect(mockReplace).toHaveBeenCalledWith("/deliberation")
     })
   })
 

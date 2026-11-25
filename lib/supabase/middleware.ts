@@ -41,12 +41,18 @@ export async function updateSession(request: NextRequest) {
   let verificationTier: VerificationTier = "UNVERIFIED";
   let trustState: TrustState = "active";
 
+  const isSupabaseAuthCookie = (name: string) =>
+    name.startsWith("sb-") && name.includes("-auth-token");
+
   // Helper to preserve rotated session cookies on every response path (including early returns)
   const withCookies = (response: NextResponse): NextResponse => {
     supabaseResponse.cookies.getAll().forEach((cookie) => {
       response.cookies.set(cookie.name, cookie.value, {
         ...cookie,
         ...cookieDomainOpts,
+        ...(isSupabaseAuthCookie(cookie.name)
+          ? { httpOnly: cookie.httpOnly ?? false }
+          : {}),
       });
     });
     return response;
@@ -70,6 +76,9 @@ export async function updateSession(request: NextRequest) {
             supabaseResponse.cookies.set(name, value, {
               ...options,
               ...cookieDomainOpts,
+              ...(isSupabaseAuthCookie(name)
+                ? { httpOnly: options?.httpOnly ?? false }
+                : {}),
             } as any)
           );
         },

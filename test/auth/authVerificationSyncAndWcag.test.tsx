@@ -18,20 +18,28 @@ vi.mock("next/navigation", () => ({
 }))
 
 // Mock auth actions
+const mockHydrateSessionAction = vi.fn().mockResolvedValue({
+  success: true,
+  userId: "usr-fragment-1",
+  isHumanVerified: true,
+})
+const mockRevalidateUserContextAction = vi.fn().mockResolvedValue({
+  authenticated: true,
+  userId: "usr-sync-1",
+  email: "citizen@sunshade.icu",
+  displayName: "Citizen Sync",
+  isHumanVerified: false,
+  verificationTier: "UNVERIFIED",
+  trustState: "active",
+})
+
 vi.mock("@/app/actions/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/actions/auth")>()
   return {
     ...actual,
     signOutAction: vi.fn().mockResolvedValue({ success: true }),
-    revalidateUserContextAction: vi.fn().mockResolvedValue({
-      authenticated: true,
-      userId: "usr-sync-1",
-      email: "citizen@sunshade.icu",
-      displayName: "Citizen Sync",
-      isHumanVerified: false,
-      verificationTier: "UNVERIFIED",
-      trustState: "active",
-    }),
+    hydrateSessionAction: (...args: any[]) => mockHydrateSessionAction(...args),
+    revalidateUserContextAction: (...args: any[]) => mockRevalidateUserContextAction(...args),
   }
 })
 
@@ -49,6 +57,7 @@ vi.mock("@/app/actions/valerieFlagActions", () => ({
 // Mock Supabase client
 const mockRefreshSession = vi.fn().mockResolvedValue({ data: { session: null }, error: null })
 const mockGetUser = vi.fn().mockResolvedValue({ data: { user: null }, error: null })
+const mockSetSession = vi.fn().mockResolvedValue({ data: { session: null }, error: null })
 const mockRpc = vi.fn().mockResolvedValue({ data: false, error: null })
 let authCallback: ((event: string, session: any) => void) | null = null
 
@@ -57,6 +66,7 @@ vi.mock("@/lib/supabase/client", () => ({
     auth: {
       refreshSession: mockRefreshSession,
       getUser: mockGetUser,
+      setSession: mockSetSession,
       signOut: vi.fn().mockResolvedValue({ error: null }),
       getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
       onAuthStateChange: vi.fn((cb) => {
@@ -207,6 +217,42 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
 
     expect(mockRefreshSession).not.toHaveBeenCalled()
     expect(mockGetUser).not.toHaveBeenCalled()
+  })
+
+  it("AuthProvider syncs UserMenu immediately when onAuthStateChange signs in a verified citizen", async () => {
+    const unauthContext: UserContext = {
+      authenticated: false,
+      userId: null,
+      email: null,
+      displayName: null,
+      isHumanVerified: false,
+      verificationTier: "UNVERIFIED",
+      trustState: "active",
+    }
+
+    render(
+      <AuthProvider initialUserContext={unauthContext}>
+        <UserMenu initialUserContext={unauthContext} />
+      </AuthProvider>
+    )
+
+    expect(screen.getByText(/Sign In/i)).toBeInTheDocument()
+
+    act(() => {
+      authCallback?.("SIGNED_IN", {
+        user: {
+          id: "usr-sync-citizen-1",
+          email: "citizen@sunshade.icu",
+          user_metadata: { full_name: "Synced Citizen" },
+          app_metadata: { is_human: true, verification_tier: "ANCHOR", trust_state: "active" },
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/Synced Citizen/i)).toBeInTheDocument()
+      expect(screen.getByText(/Verified Human/i)).toBeInTheDocument()
+    })
   })
 })
 

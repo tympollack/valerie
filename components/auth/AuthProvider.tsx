@@ -13,7 +13,6 @@ import { createClient } from "@/lib/supabase/client"
 import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
 import {
   type UserContext,
-  getCurrentUserContext,
   revalidateUserContextAction,
 } from "@/app/actions/auth"
 
@@ -61,7 +60,11 @@ export function AuthProvider({
 
   // Strip sensitive access/refresh tokens from the browser address bar immediately
   useEffect(() => {
-    if (typeof window !== "undefined" && window.location.hash) {
+    if (
+      typeof window !== "undefined" &&
+      window.location.pathname !== "/auth/callback" &&
+      window.location.hash
+    ) {
       const hash = window.location.hash
       if (
         hash.includes("access_token=") ||

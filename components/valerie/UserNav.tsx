@@ -23,6 +23,7 @@ import {
   Loader2,
 } from "lucide-react"
 import { type UserContext, signOutAction, revalidateUserContextAction } from "@/app/actions/auth"
+import { useAuth } from "@/components/auth/AuthProvider"
 import { createClient } from "@/lib/supabase/client"
 import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
@@ -34,16 +35,18 @@ interface UserNavProps {
 
 export function UserNav({ initialUserContext, className }: UserNavProps) {
   const router = useRouter()
+  const authContext = useAuth()
   const [userContext, setUserContext] = useState<UserContext>(
-    initialUserContext || {
-      authenticated: false,
-      userId: null,
-      email: null,
-      displayName: null,
-      isHumanVerified: false,
-      verificationTier: "UNVERIFIED",
-      trustState: "active",
-    }
+    initialUserContext ||
+      authContext?.userContext || {
+        authenticated: false,
+        userId: null,
+        email: null,
+        displayName: null,
+        isHumanVerified: false,
+        verificationTier: "UNVERIFIED",
+        trustState: "active",
+      }
   )
   const [isOpen, setIsOpen] = useState(false)
   const [isSigningOut, startSignOut] = useTransition()
@@ -59,6 +62,23 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       prevUserIdRef.current = initialUserContext.userId
     }
   }, [initialUserContext])
+
+  // Sync state when AuthProvider hydrates a session on the client (e.g. from URL hash fragment)
+  useEffect(() => {
+    const ctx = authContext?.userContext
+    if (!ctx?.authenticated) return
+    setUserContext((prev) => {
+      if (
+        prev.authenticated === ctx.authenticated &&
+        prev.userId === ctx.userId &&
+        prev.isHumanVerified === ctx.isHumanVerified
+      ) {
+        return prev
+      }
+      prevUserIdRef.current = ctx.userId
+      return ctx
+    })
+  }, [authContext?.userContext])
 
   // Safely set the return URL on client mount to prevent empty return_to during SSR
   useEffect(() => {
