@@ -187,6 +187,38 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
     })
   })
 
+  it("AuthProvider does not trigger verification round trips on focus or visibilitychange for unauthenticated guests", async () => {
+    const guestContext: UserContext = {
+      authenticated: false,
+      userId: null,
+      email: null,
+      displayName: null,
+      isHumanVerified: false,
+      verificationTier: "UNVERIFIED",
+      trustState: "active",
+    }
+
+    render(
+      <AuthProvider initialUserContext={guestContext}>
+        <div>Guest View</div>
+      </AuthProvider>
+    )
+
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      writable: true,
+      configurable: true,
+    })
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+
+    expect(mockRefreshSession).not.toHaveBeenCalled()
+    expect(mockGetUser).not.toHaveBeenCalled()
+  })
+
   it("AuthProvider syncs UserMenu immediately when onAuthStateChange signs in a verified citizen", async () => {
     const unauthContext: UserContext = {
       authenticated: false,
@@ -349,5 +381,23 @@ describe("TASK-VAL-VERIFY-UI-WCAG-SPACE: De-Cramp Menu, Contrast & Inline Gate",
     expect(inlineCta[0]).toHaveClass("min-h-[44px]")
     expect(inlineCta[0]).toHaveClass("bg-amber-400")
     expect(inlineCta[0]).toHaveClass("text-slate-950")
+  })
+
+  it("sanitizes plaintext access_token and refresh_token from window.location.hash on client mount", () => {
+    const replaceStateSpy = vi.spyOn(window.history, "replaceState").mockImplementation(() => {})
+    window.location.hash = "#access_token=eyJhbGciOiJFUzI1Ni...&refresh_token=refresh_secret&token_type=bearer"
+
+    render(
+      <AuthProvider initialUserContext={unverifiedContext}>
+        <div>Deliberation Protected</div>
+      </AuthProvider>
+    )
+
+    expect(replaceStateSpy).toHaveBeenCalledWith(
+      null,
+      "",
+      window.location.pathname + (window.location.search || "")
+    )
+    replaceStateSpy.mockRestore()
   })
 })

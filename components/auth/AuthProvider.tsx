@@ -58,6 +58,30 @@ export function AuthProvider({
     }
   }, [initialUserContext])
 
+  // Strip sensitive access/refresh tokens from the browser address bar immediately
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      window.location.pathname !== "/auth/callback" &&
+      window.location.hash
+    ) {
+      const hash = window.location.hash
+      if (
+        hash.includes("access_token=") ||
+        hash.includes("refresh_token=") ||
+        hash.includes("token_type=")
+      ) {
+        const cleanUrl =
+          window.location.pathname + (window.location.search || "")
+        try {
+          window.history.replaceState(null, "", cleanUrl)
+        } catch {
+          window.location.hash = ""
+        }
+      }
+    }
+  }, [])
+
   const refreshVerification = useCallback(async (): Promise<boolean> => {
     try {
       setIsRefreshing(true)
@@ -86,24 +110,25 @@ export function AuthProvider({
           currentUserId = user.id
           email = user.email || email
 
+          const freshProof = extractVerificationProof(user)
+          freshTier = freshProof.verificationTier
+          freshTrustState = freshProof.trustState
+
           try {
             const { data: rpcRes, error: rpcErr } = await supabase.rpc(
               "is_human_verified",
               { p_user_id: user.id }
             )
             if (!rpcErr && typeof rpcRes === "boolean") {
-              isVerified = rpcRes
+              isVerified = rpcRes && freshProof.trustState === "active"
             }
           } catch {
             // RPC fallback
           }
 
-          const freshProof = extractVerificationProof(user)
           if (freshProof.isHuman && freshProof.trustState === "active") {
             isVerified = true
           }
-          freshTier = freshProof.verificationTier
-          freshTrustState = freshProof.trustState
           displayName =
             (user.user_metadata?.full_name as string) ||
             (user.user_metadata?.name as string) ||
