@@ -1,5 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { NextRequest } from "next/server";
+
+const { mockCreateServerClientOverride } = vi.hoisted(() => ({
+  mockCreateServerClientOverride: { fn: null as null | ((...args: any[]) => any) },
+}));
+
+vi.mock("@supabase/ssr", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@supabase/ssr")>();
+  return {
+    ...actual,
+    createServerClient: (...args: any[]) =>
+      mockCreateServerClientOverride.fn
+        ? mockCreateServerClientOverride.fn(...args)
+        : actual.createServerClient(...(args as [string, string, any])),
+  };
+});
+
 import { updateSession } from "@/lib/supabase/middleware";
 import {
   getUserContextFromHeaders,
@@ -259,6 +275,51 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
 
       const res = await updateSession(req);
       expect(res.status).toBe(401);
+    });
+
+    it("permits Server Action POST to /polls/[id] when RPC verifies an unverified-claim session", async () => {
+      const origUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const origKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      const rpcSpy = vi.fn(async () => ({ data: true, error: null }));
+      mockCreateServerClientOverride.fn = () => ({
+        auth: {
+          getUser: vi.fn(async () => ({
+            data: {
+              user: {
+                id: "user-rpc-verified-1",
+                app_metadata: { is_human: false, verification_tier: "UNVERIFIED", trust_state: "active" },
+                user_metadata: {},
+              },
+            },
+            error: null,
+          })),
+        },
+        schema: vi.fn(() => ({ rpc: rpcSpy })),
+      });
+
+      try {
+        process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+
+        const req = new NextRequest("https://valerie.sunshade.icu/polls/poll-123", {
+          method: "POST",
+          headers: {
+            cookie: `sunshade_sso=${unverifiedBotJWT}`,
+            "next-action": "action_submit_vote",
+          },
+        });
+
+        const res = await updateSession(req);
+        expect(res.status).toBe(200);
+        expect(rpcSpy).toHaveBeenCalledWith("is_human_verified", {
+          p_user_id: "user-rpc-verified-1",
+        });
+        expect(req.headers.get("x-is-human-verified")).toBe("true");
+      } finally {
+        mockCreateServerClientOverride.fn = null;
+        process.env.NEXT_PUBLIC_SUPABASE_URL = origUrl;
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = origKey;
+      }
     });
   });
 });

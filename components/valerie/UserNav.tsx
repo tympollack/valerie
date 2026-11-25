@@ -168,7 +168,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       const supabase = createClient()
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event, session) => {
+      } = supabase.auth.onAuthStateChange((event, session) => {
         // Only clear user context on explicit SIGNED_OUT event.
         // For SSO-only visitors, the client-side Supabase instance initially receives
         // a null browser session (INITIAL_SESSION) while server-side context is already
@@ -187,7 +187,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
           })
         } else if (session?.user) {
           const freshProof = extractVerificationProof(session.user)
-          const isHumanVerified = freshProof.isHuman && freshProof.trustState === "active"
+          const claimVerified = freshProof.isHuman && freshProof.trustState === "active"
           const email = session.user.email || null
           const displayName =
             (session.user.user_metadata?.full_name as string) ||
@@ -199,18 +199,35 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             Boolean(prevUserIdRef.current) && prevUserIdRef.current !== session.user.id
           prevUserIdRef.current = session.user.id
 
-          setUserContext({
+          setUserContext((prev) => ({
             authenticated: true,
             userId: session.user.id,
             email,
             displayName,
-            isHumanVerified,
+            isHumanVerified:
+              claimVerified ||
+              (!isDifferentUser &&
+                prev.userId === session.user.id &&
+                prev.isHumanVerified &&
+                freshProof.trustState === "active"),
             verificationTier: freshProof.verificationTier,
             trustState: freshProof.trustState,
             nullifierHash: freshProof.nullifierHash,
             provider: freshProof.provider,
             score: freshProof.score,
-          })
+          }))
+
+          if (!claimVerified && freshProof.trustState === "active") {
+            void checkHumanVerifiedRpc(supabase, session.user.id).then((rpcVerified) => {
+              if (rpcVerified === true) {
+                setUserContext((prev) =>
+                  prev.userId === session.user.id
+                    ? { ...prev, isHumanVerified: true }
+                    : prev
+                )
+              }
+            })
+          }
 
           if (isDifferentUser) {
             router.refresh()

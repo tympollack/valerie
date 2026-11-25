@@ -213,7 +213,7 @@ export async function evaluateFlagConsensusAsync(pollId: string): Promise<string
  * Satisfies the 24-hour Commit-and-Reveal gate and triggers cross-spectrum consensus evaluations.
  */
 export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<FlagPollResult> {
-  const supabase = await createClient();
+  let supabase = await createClient();
 
   // 1. Session & Anti-Sybil human verification check
   let {
@@ -229,6 +229,7 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
       if (!ssoError && ssoData?.user) {
         user = ssoData.user;
         authError = null;
+        supabase = await createClient(ssoToken);
       }
     }
   }

@@ -266,4 +266,38 @@ describe("flagPollWithCommitGate Server Action", () => {
       (process.env as any).NODE_ENV = originalEnv;
     }
   });
+
+  it("allows flagging when JWT claims are unverified but valerie.is_human_verified RPC returns true", async () => {
+    mockUser = {
+      id: "usr-rpc-only-flagger",
+      app_metadata: {
+        is_human: false,
+        verification_tier: "UNVERIFIED",
+        trust_state: "active",
+      },
+      user_metadata: {},
+    };
+    const rpcSpy = vi.fn(async () => ({ data: true, error: null }));
+    const { createClient } = await import("@/lib/supabase/server");
+    vi.mocked(createClient).mockResolvedValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({ data: { user: mockUser }, error: null })),
+      },
+      schema: vi.fn(() => ({
+        from: mockFrom,
+        rpc: rpcSpy,
+      })),
+    } as any);
+
+    const result = await flagPollWithCommitGate({
+      pollId: "poll-flag-rpc",
+      flagReason: "LOADED_FRAMING",
+      suggestedAxisComment: "Clarify question framing",
+    });
+
+    expect(result.success).toBe(true);
+    expect(rpcSpy).toHaveBeenCalledWith("is_human_verified", {
+      p_user_id: "usr-rpc-only-flagger",
+    });
+  });
 });
