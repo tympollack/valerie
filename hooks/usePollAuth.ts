@@ -41,5 +41,17 @@ export function usePollAuth(userContextProp?: UserContext | null) {
     } catch {}
   }, [userContextProp, authContext])
 
+  const hasFreshAuthUpgrade = Boolean(
+    authContext?.userContext.authenticated &&
+      (!userContextProp?.authenticated ||
+        (userContextProp.userId === authContext.userContext.userId &&
+          !userContextProp.isHumanVerified &&
+          authContext.userContext.isHumanVerified))
+  )
+
+  if (hasFreshAuthUpgrade && authContext?.userContext) {
+    return authContext.userContext
+  }
+
   return userContextProp ?? authContext?.userContext ?? localUserContext
 }

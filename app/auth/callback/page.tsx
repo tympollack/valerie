@@ -27,16 +27,31 @@ export default function AuthCallbackPage() {
         exchangeCode: async (code) => {
           const supabase = createClient()
           const { data, error } = await supabase.auth.exchangeCodeForSession(code)
-          if (error || !data.session) return null
-          return {
-            access_token: data.session.access_token,
-            refresh_token: data.session.refresh_token,
+          if (!error && data.session) {
+            return {
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+            }
           }
+          const { data: existing } = await supabase.auth.getSession()
+          if (existing?.session) {
+            return {
+              access_token: existing.session.access_token,
+              refresh_token: existing.session.refresh_token,
+            }
+          }
+          return null
         },
         setSession: async ({ access_token, refresh_token }) => {
           const supabase = createClient()
           if (refresh_token) {
-            await supabase.auth.setSession({ access_token, refresh_token })
+            const { data } = await supabase.auth.setSession({ access_token, refresh_token })
+            if (data?.session) {
+              return {
+                access_token: data.session.access_token,
+                refresh_token: data.session.refresh_token,
+              }
+            }
           }
         },
         persistServerSession: async (accessToken, refreshToken) => {
@@ -48,6 +63,9 @@ export default function AuthCallbackPage() {
 
       if (result.success && result.destination) {
         setStatus("verified")
+        try {
+          window.history.replaceState(null, "", window.location.pathname)
+        } catch {}
         window.location.replace(result.destination)
       } else {
         setStatus("error")

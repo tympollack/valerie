@@ -167,7 +167,7 @@ describe("UserNav Component", () => {
     fireEvent.click(trigger)
 
     // Verify popover menu items
-    expect(screen.getByText(/Single-Human Verified/i)).toBeInTheDocument()
+    expect(screen.getByText(/Identity Confirmed/i)).toBeInTheDocument()
     expect(screen.getByText(/Voting Rights Active/i)).toBeInTheDocument()
     expect(screen.getByText(/Account & Settings/i)).toBeInTheDocument()
 
@@ -179,6 +179,56 @@ describe("UserNav Component", () => {
 
     expect(mockSignOut).toHaveBeenCalled()
     expect(mockSignOutAction).toHaveBeenCalled()
+  })
+
+  it("expires legacy host-only and apex-domain sb-*-auth-token cookies on sign out", async () => {
+    const writes: string[] = []
+    const cookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie")
+    const originalLocation = window.location
+    delete (window as any).location
+    window.location = {
+      ...originalLocation,
+      hostname: "valerie.sunshade.icu",
+      protocol: "https:",
+      pathname: "/",
+      search: "",
+      hash: "",
+    } as any
+
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      get: () => "sb-proj-auth-token=legacy-host-only-session; theme=dark",
+      set: (val: string) => {
+        writes.push(val)
+      },
+    })
+
+    const context: UserContext = {
+      authenticated: true,
+      userId: "usr-legacy-123",
+      email: "legacy@sunshade.icu",
+      displayName: "Legacy User",
+      isHumanVerified: true,
+      verificationTier: "ANCHOR",
+      trustState: "active",
+    }
+
+    try {
+      render(<UserNav initialUserContext={context} />)
+      fireEvent.click(screen.getByRole("button", { name: /User Account Menu/i }))
+      const signOutBtn = screen.getByRole("button", { name: /Sign Out/i })
+      await act(async () => {
+        fireEvent.click(signOutBtn)
+      })
+    } finally {
+      if (cookieDescriptor) {
+        Object.defineProperty(document, "cookie", cookieDescriptor)
+      }
+      window.location = originalLocation as any
+    }
+
+    expect(writes.some((w) => w.startsWith("sb-proj-auth-token=; Path=/; Max-Age=0") && !w.includes("domain="))).toBe(true)
+    expect(writes.some((w) => w.startsWith("sb-proj-auth-token=; Path=/; domain=.sunshade.icu; Max-Age=0"))).toBe(true)
   })
 })
 

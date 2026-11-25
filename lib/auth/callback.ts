@@ -37,11 +37,19 @@ export interface ProcessCallbackParams {
   search: string
   hostname: string
   exchangeCode?: (code: string) => Promise<{ access_token: string; refresh_token?: string } | null>
-  setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<void>
+  setSession?: (session: { access_token: string; refresh_token?: string }) => Promise<{ access_token?: string; refresh_token?: string } | void | null>
   persistServerSession: (
     accessToken: string,
     refreshToken?: string | null
-  ) => Promise<{ success: boolean; error?: string } | void>
+  ) => Promise<
+    | {
+        success: boolean
+        error?: string
+        accessToken?: string
+        refreshToken?: string | null
+      }
+    | void
+  >
 }
 
 export interface ProcessCallbackResult {
@@ -51,9 +59,27 @@ export interface ProcessCallbackResult {
 }
 
 /**
+ * Safely strips sensitive credential parameters from URL hash fragments
+ * (e.g. #access_token=... or #refresh_token=...) while preserving UI anchor fragments.
+ */
+export function stripCredentialHash(hash: string): string {
+  if (!hash) return ""
+  if (
+    hash.includes("access_token=") ||
+    hash.includes("refresh_token=") ||
+    hash.includes("token_type=") ||
+    hash.includes("provider_token=")
+  ) {
+    return ""
+  }
+  return hash
+}
+
+/**
  * Safely sanitizes the return_to target URL to prevent open redirect vulnerabilities.
  * Enforces local relative paths starting with / (excluding protocol-relative //)
  * or safe absolute URLs strictly matching the current callback host's cookie apex domain.
+ * Strips sensitive auth token hash fragments (#access_token=...) to avoid token leakage.
  */
 export function sanitizeReturnTo(
   target: string | null | undefined,
@@ -85,7 +111,8 @@ export function sanitizeReturnTo(
     try {
       const parsedLocal = new URL(cleaned, "https://local.check")
       if (parsedLocal.origin === "https://local.check") {
-        const safePath = parsedLocal.pathname + parsedLocal.search + parsedLocal.hash
+        const safeHash = stripCredentialHash(parsedLocal.hash)
+        const safePath = parsedLocal.pathname + parsedLocal.search + safeHash
         if (safePath.startsWith("/") && !safePath.startsWith("//") && !safePath.includes("\\")) {
           return safePath
         }
@@ -109,10 +136,11 @@ export function sanitizeReturnTo(
 
     const parsed = new URL(cleaned, `https://${baseHost}`)
     const destHost = parsed.hostname.toLowerCase()
+    const safeHash = stripCredentialHash(parsed.hash)
 
     // If absolute URL points to the exact same host as baseHost, extract local path
     if (destHost === baseHost) {
-      const safePath = parsed.pathname + parsed.search + parsed.hash
+      const safePath = parsed.pathname + parsed.search + safeHash
       if (safePath.startsWith("/") && !safePath.startsWith("//") && !safePath.includes("\\")) {
         return safePath
       }
@@ -137,10 +165,10 @@ export function sanitizeReturnTo(
       destHost === "127.0.0.1"
 
     if (!isApexOrLocal && (destHost.endsWith(".votary.app") || destHost.endsWith(".sunshade.icu"))) {
-      return parsed.origin + parsed.pathname + parsed.search + parsed.hash
+      return parsed.origin + parsed.pathname + parsed.search + safeHash
     }
 
-    const safePath = parsed.pathname + parsed.search + parsed.hash
+    const safePath = parsed.pathname + parsed.search + safeHash
     if (!safePath.startsWith("/") || safePath.startsWith("//") || safePath.includes("\\")) {
       return "/deliberation"
     }
@@ -193,13 +221,15 @@ export function parseCallbackTokens(
   const refreshToken = hashParams.get("refresh_token") || null
   const code = queryParams.get("code") || hashParams.get("code") || null
 
-  // Target redirect destination
+  // Target redirect destination (check explicit next before opaque OAuth state)
   const rawReturnTo =
     hashParams.get("return_to") ||
     hashParams.get("redirect") ||
+    hashParams.get("next") ||
     hashParams.get("state") ||
     queryParams.get("return_to") ||
     queryParams.get("redirect") ||
+    queryParams.get("next") ||
     queryParams.get("state") ||
     "/deliberation"
 
@@ -291,6 +321,30 @@ export function getClientCookieStrings(
 }
 
 /**
+ * Expires any legacy host-only or domain-scoped Supabase auth cookies in document.cookie
+ * so browser refreshes and server requests never read split cookie scopes.
+ */
+export function clearBrowserSupabaseCookies(hostname: string = "votary.app"): void {
+  if (typeof document === "undefined" || !document.cookie) return
+
+  const cookieOpts = getCrossDomainCookieOptions(hostname)
+  const isHttps = typeof window !== "undefined" ? window.location.protocol === "https:" : true
+  const securePart = isHttps ? "; Secure" : ""
+
+  const names = document.cookie
+    .split("; ")
+    .map((chunk) => chunk.split("=")[0]?.trim())
+    .filter((name): name is string => Boolean(name && name.startsWith("sb-") && name.includes("-auth-token")))
+
+  for (const name of names) {
+    document.cookie = `${name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax${securePart}`
+    if (cookieOpts.domain) {
+      document.cookie = `${name}=; Path=/; domain=${cookieOpts.domain}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax${securePart}`
+    }
+  }
+}
+
+/**
  * Orchestrates full cross-domain session hydration pipeline.
  */
 export async function processCallbackAuthentication({
@@ -329,12 +383,54 @@ export async function processCallbackAuthentication({
 
   verifyAntiSybilClaim(activeAccessToken)
 
+  if (!persistServerSession) {
+    return {
+      success: false,
+      error: "Server session persistence handler is required to establish authentication",
+    }
+  }
+
+  // Verify and persist server session BEFORE mutating existing browser cookies
+  // so forged/failed callbacks never erase a visitor's active session.
+  try {
+    const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
+    if (serverRes && typeof serverRes === "object") {
+      if (!serverRes.success) {
+        return {
+          success: false,
+          error: serverRes.error || "Server session hydration failed",
+        }
+      }
+      if (serverRes.accessToken) {
+        activeAccessToken = serverRes.accessToken
+      }
+      if (serverRes.refreshToken !== undefined) {
+        activeRefreshToken = serverRes.refreshToken
+      }
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || "Failed to persist server session",
+    }
+  }
+
+  clearBrowserSupabaseCookies(hostname)
+
   if (setSession) {
     try {
-      await setSession({
+      const updatedSession = await setSession({
         access_token: activeAccessToken,
         refresh_token: activeRefreshToken || undefined,
       })
+      if (updatedSession && typeof updatedSession === "object") {
+        if (updatedSession.access_token) {
+          activeAccessToken = updatedSession.access_token
+        }
+        if (updatedSession.refresh_token) {
+          activeRefreshToken = updatedSession.refresh_token
+        }
+      }
     } catch {
       // Non-blocking client fallback
     }
@@ -349,28 +445,6 @@ export async function processCallbackAuthentication({
     }
   } catch {
     // Browser environment safety guard
-  }
-
-  if (!persistServerSession) {
-    return {
-      success: false,
-      error: "Server session persistence handler is required to establish authentication",
-    }
-  }
-
-  try {
-    const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
-    if (serverRes && typeof serverRes === "object" && !serverRes.success) {
-      return {
-        success: false,
-        error: serverRes.error || "Server session hydration failed",
-      }
-    }
-  } catch (err: any) {
-    return {
-      success: false,
-      error: err?.message || "Failed to persist server session",
-    }
   }
 
   return { success: true, destination: tokens.returnTo || "/deliberation" }

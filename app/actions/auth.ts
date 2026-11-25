@@ -12,6 +12,7 @@ import {
 } from "@/lib/auth/ssoHandshake"
 import { cookies, headers } from "next/headers"
 import { revalidatePath } from "next/cache"
+import { cache } from "react"
 
 export interface UserContext {
   authenticated: boolean
@@ -27,9 +28,10 @@ export interface UserContext {
 }
 
 /**
- * Resolves current user session and Anti-Sybil verification status from Supabase and headers.
+ * Per-request memoized user session and Anti-Sybil verification resolver.
+ * Deduplicates calls shared between RootLayout and page Server Components within one render pass.
  */
-export async function getCurrentUserContext(): Promise<UserContext> {
+const resolveCurrentUserContext = cache(async (): Promise<UserContext> => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
@@ -37,7 +39,7 @@ export async function getCurrentUserContext(): Promise<UserContext> {
     try {
       const cookieStore = await cookies()
       const ssoToken = extractSSOToken(cookieStore)
-      const supabase = await createClient(ssoToken)
+      let supabase = await createClient()
       let resolvedUser = null
 
       const {
@@ -48,12 +50,14 @@ export async function getCurrentUserContext(): Promise<UserContext> {
       if (!userErr && user) {
         resolvedUser = user
       } else if (ssoToken) {
+        const ssoClient = await createClient(ssoToken)
         const {
           data: ssoData,
           error: ssoErr,
-        } = await supabase.auth.getUser(ssoToken)
+        } = await ssoClient.auth.getUser(ssoToken)
         if (!ssoErr && ssoData?.user) {
           resolvedUser = ssoData.user
+          supabase = ssoClient
         }
       }
 
@@ -68,7 +72,7 @@ export async function getCurrentUserContext(): Promise<UserContext> {
             { p_user_id: resolvedUser.id }
           )
           if (!rpcErr && typeof rpcRes === "boolean") {
-            isHumanVerified = rpcRes
+            isHumanVerified = rpcRes && proof.trustState === "active"
           }
         } catch {
           // Non-blocking fallback to extracted proof
@@ -135,6 +139,13 @@ export async function getCurrentUserContext(): Promise<UserContext> {
     verificationTier: "UNVERIFIED",
     trustState: "active",
   }
+})
+
+/**
+ * Resolves current user session and Anti-Sybil verification status from Supabase and headers.
+ */
+export async function getCurrentUserContext(): Promise<UserContext> {
+  return resolveCurrentUserContext()
 }
 
 /**
@@ -175,10 +186,12 @@ export async function signOutAction(): Promise<{ success: boolean }> {
   // Clear Supabase auth cookies
   for (const cookie of cookieStore.getAll()) {
     if (cookie.name.startsWith("sb-")) {
+      const isSbAuth = cookie.name.includes("-auth-token")
       try {
         cookieStore.delete(cookie.name)
         cookieStore.set(cookie.name, "", {
           ...cookieDomainOpts,
+          ...(isSbAuth ? { httpOnly: false } : {}),
           maxAge: 0,
           expires: new Date(0),
         })
@@ -196,6 +209,8 @@ export interface HydrateSessionResult {
   success: boolean
   userId: string | null
   isHumanVerified: boolean
+  accessToken?: string
+  refreshToken?: string | null
   error?: string
 }
 
@@ -225,29 +240,61 @@ export async function hydrateSessionAction(
     }
   }
 
-  // Verify token expiry
+  let effectiveAccessToken = accessToken
+  let effectiveRefreshToken = refreshToken ?? null
+
+  // Verify token expiry (attempt server refresh if expired and refreshToken is present)
   const nowSec = Math.floor(Date.now() / 1000)
-  if (typeof payload.exp === "number" && payload.exp < nowSec) {
-    return {
-      success: false,
-      userId: null,
-      isHumanVerified: false,
-      error: "Access token has expired",
-    }
-  }
+  const isExpired = typeof payload.exp === "number" && payload.exp < nowSec
 
   let verifiedUser: { id: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> } | null = null
 
   // Cryptographically verify token with Supabase Auth when configured
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (supabaseUrl && supabaseKey) {
+
+  if (isExpired) {
+    if (supabaseUrl && supabaseKey && effectiveRefreshToken) {
+      try {
+        const supabase = await createClient()
+        const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession({
+          refresh_token: effectiveRefreshToken,
+        })
+        if (!refreshErr && refreshed?.session?.access_token && refreshed.user) {
+          effectiveAccessToken = refreshed.session.access_token
+          effectiveRefreshToken = refreshed.session.refresh_token ?? effectiveRefreshToken
+          verifiedUser = refreshed.user
+        } else {
+          return {
+            success: false,
+            userId: null,
+            isHumanVerified: false,
+            error: "Access token has expired",
+          }
+        }
+      } catch {
+        return {
+          success: false,
+          userId: null,
+          isHumanVerified: false,
+          error: "Access token has expired",
+        }
+      }
+    } else {
+      return {
+        success: false,
+        userId: null,
+        isHumanVerified: false,
+        error: "Access token has expired",
+      }
+    }
+  } else if (supabaseUrl && supabaseKey) {
     try {
-      const supabase = await createClient(accessToken)
+      const supabase = await createClient(effectiveAccessToken)
       const {
         data: { user },
         error: userErr,
-      } = await supabase.auth.getUser(accessToken)
+      } = await supabase.auth.getUser(effectiveAccessToken)
 
       if (userErr || !user) {
         return {
@@ -270,11 +317,14 @@ export async function hydrateSessionAction(
     }
   }
 
+  const effectivePayload = decodeJWT(effectiveAccessToken) || payload
   // Derive verification claims from cryptographically verified user or decoded payload
-  const proof = extractAntiSybilProof(verifiedUser || payload)
+  const proof = extractAntiSybilProof(verifiedUser || effectivePayload)
   // Hard Gate: trust state MUST be active for human verification
   const isHumanVerified = Boolean(proof.isHuman && proof.trustState === "active")
-  const userId = verifiedUser ? verifiedUser.id : (payload.sub || payload.id || payload.user_id || null)
+  const userId = verifiedUser
+    ? verifiedUser.id
+    : effectivePayload.sub || effectivePayload.id || effectivePayload.user_id || null
 
   const cookieStore = await cookies()
   const headerList = await headers()
@@ -291,6 +341,7 @@ export async function hydrateSessionAction(
           cookieStore.delete(c.name)
           cookieStore.set(c.name, "", {
             ...cookieDomainOpts,
+            httpOnly: false,
             maxAge: 0,
             expires: new Date(0),
           })
@@ -300,21 +351,21 @@ export async function hydrateSessionAction(
       }
     }
 
-    cookieStore.set("sunshade_sso", accessToken, {
+    cookieStore.set("sunshade_sso", effectiveAccessToken, {
       ...cookieDomainOpts,
       maxAge: cookieMaxAge,
     })
-    cookieStore.set("sunshade_sso_token", accessToken, {
+    cookieStore.set("sunshade_sso_token", effectiveAccessToken, {
       ...cookieDomainOpts,
       maxAge: cookieMaxAge,
     })
-    cookieStore.set("sb-access-token", accessToken, {
+    cookieStore.set("sb-access-token", effectiveAccessToken, {
       ...cookieDomainOpts,
       maxAge: cookieMaxAge,
     })
 
-    if (refreshToken) {
-      cookieStore.set("sb-refresh-token", refreshToken, {
+    if (effectiveRefreshToken) {
+      cookieStore.set("sb-refresh-token", effectiveRefreshToken, {
         ...cookieDomainOpts,
         maxAge: cookieMaxAge,
       })
@@ -322,11 +373,11 @@ export async function hydrateSessionAction(
 
     // Also hydrate native Supabase SSR client session
     if (supabaseUrl && supabaseKey) {
-      const supabase = await createClient(accessToken)
-      if (refreshToken) {
+      const supabase = await createClient(effectiveAccessToken)
+      if (effectiveRefreshToken) {
         await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
+          access_token: effectiveAccessToken,
+          refresh_token: effectiveRefreshToken,
         })
       }
     }
@@ -339,6 +390,8 @@ export async function hydrateSessionAction(
     success: true,
     userId,
     isHumanVerified,
+    accessToken: effectiveAccessToken,
+    refreshToken: effectiveRefreshToken,
   }
 }
 

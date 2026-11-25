@@ -177,7 +177,10 @@ export function BivariatePollCard({
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setReturnUrl(window.location.pathname + window.location.search + window.location.hash)
+      const hasAuth =
+        window.location.hash.includes("access_token=") ||
+        window.location.hash.includes("refresh_token=")
+      setReturnUrl(window.location.pathname + window.location.search + (hasAuth ? "" : window.location.hash))
     }
   }, [])
 
@@ -196,7 +199,9 @@ export function BivariatePollCard({
       : "https://hub.sunshade.icu"
 
   const currentHref =
-    typeof window !== "undefined" ? window.location.href : returnUrl || "/"
+    typeof window !== "undefined"
+      ? (window.location.hash.includes("access_token=") ? window.location.href.split("#")[0] : window.location.href)
+      : returnUrl || "/"
 
   const callbackUrl =
     typeof window !== "undefined"
