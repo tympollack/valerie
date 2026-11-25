@@ -26,7 +26,7 @@ import { type UserContext, signOutAction, revalidateUserContextAction } from "@/
 import { useAuth } from "@/components/auth/AuthProvider"
 import { clearBrowserSupabaseCookies } from "@/lib/auth/callback"
 import { createClient } from "@/lib/supabase/client"
-import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
+import { extractVerificationProof, checkHumanVerifiedRpc } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
 
 interface UserNavProps {
@@ -120,15 +120,10 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
         if (user) {
           const freshProof = extractVerificationProof(user)
 
-          try {
-            const { data: rpcRes, error: rpcErr } = await supabase.rpc(
-              "is_human_verified",
-              { p_user_id: user.id }
-            )
-            if (!rpcErr && typeof rpcRes === "boolean") {
-              isVerified = rpcRes && freshProof.trustState === "active"
-            }
-          } catch {}
+          const rpcVerified = await checkHumanVerifiedRpc(supabase, user.id)
+          if (typeof rpcVerified === "boolean") {
+            isVerified = rpcVerified && freshProof.trustState === "active"
+          }
 
           if (freshProof.isHuman && freshProof.trustState === "active") {
             isVerified = true

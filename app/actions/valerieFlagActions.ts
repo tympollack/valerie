@@ -13,7 +13,11 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
+import {
+  extractAntiSybilProof,
+  checkHumanVerifiedRpc,
+  extractSSOToken,
+} from "@/lib/auth/ssoHandshake";
 import {
   generateEmbedding,
   generateDeterministicEmbedding,
@@ -240,12 +244,19 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const userAppMeta = (user.app_metadata as Record<string, unknown>) || {};
   const userMetadata = (user.user_metadata as Record<string, unknown>) || {};
 
-  const isHumanVerified = Boolean(
+  let isHumanVerified = Boolean(
     antiSybilProof.isHuman ||
       antiSybilProof.antiSybilVerified ||
       userAppMeta.is_human_verified === true ||
       userMetadata.is_human_verified === true
   );
+
+  if (!isHumanVerified && antiSybilProof.trustState === "active") {
+    const rpcVerified = await checkHumanVerifiedRpc(supabase, user.id);
+    if (rpcVerified === true) {
+      isHumanVerified = true;
+    }
+  }
 
   if (!isHumanVerified || antiSybilProof.trustState !== "active") {
     return {

@@ -12,6 +12,7 @@
 import { createClient } from "@/lib/supabase/server";
 import {
   extractAntiSybilProof,
+  checkHumanVerifiedRpc,
   extractSSOToken,
   validateSSOHandshake,
 } from "@/lib/auth/ssoHandshake";
@@ -116,12 +117,19 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
     const userAppMeta = (user.app_metadata as Record<string, unknown>) || {};
     const userMetadata = (user.user_metadata as Record<string, unknown>) || {};
 
-    const isHumanVerified = Boolean(
+    let isHumanVerified = Boolean(
       antiSybilProof.isHuman ||
         antiSybilProof.antiSybilVerified ||
         userAppMeta.is_human_verified === true ||
         userMetadata.is_human_verified === true
     );
+
+    if (!isHumanVerified && antiSybilProof.trustState === "active") {
+      const rpcVerified = await checkHumanVerifiedRpc(supabase, user.id);
+      if (rpcVerified === true) {
+        isHumanVerified = true;
+      }
+    }
 
     // 2. Anti-Sybil Verification check (Defense-in-depth before DB RLS hard gate)
     if (!isHumanVerified || antiSybilProof.trustState !== "active") {
