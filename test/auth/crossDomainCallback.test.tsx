@@ -31,12 +31,14 @@ const mockExchangeCode = vi.fn().mockResolvedValue({
   data: { session: { access_token: "code_access_token", refresh_token: "code_refresh_token" } },
   error: null,
 })
+const mockGetSession = vi.fn().mockResolvedValue({ data: { session: null }, error: null })
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
       setSession: mockSetSession,
       exchangeCodeForSession: mockExchangeCode,
+      getSession: mockGetSession,
     },
   }),
 }))
@@ -322,7 +324,7 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
     })
   })
 
-  it("hydrates session and forwards refreshed tokens returned by setSession to persistServerSession", async () => {
+  it("hydrates session and forwards server-refreshed tokens to setSession", async () => {
     const now = Math.floor(Date.now() / 1000)
     const staleToken = createTestJWT({
       sub: "usr-citizen-42",
@@ -335,14 +337,12 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
       app_metadata: { verification_tier: "ANCHOR", trust_state: "active" },
     })
 
-    mockSetSession.mockResolvedValueOnce({
-      data: {
-        session: {
-          access_token: freshToken,
-          refresh_token: "rotated_refresh_999",
-        },
-      },
-      error: null,
+    mockHydrateSessionAction.mockResolvedValueOnce({
+      success: true,
+      userId: "usr-citizen-42",
+      isHumanVerified: true,
+      accessToken: freshToken,
+      refreshToken: "rotated_refresh_999",
     })
 
     window.location.hash = `#access_token=${staleToken}&refresh_token=old_refresh_111`
@@ -350,15 +350,16 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
     render(<AuthCallbackPage />)
 
     await waitFor(() => {
-      expect(mockHydrateSessionAction).toHaveBeenCalledWith(
-        freshToken,
-        "rotated_refresh_999"
-      )
+      expect(mockHydrateSessionAction).toHaveBeenCalledWith(staleToken, "old_refresh_111")
+      expect(mockSetSession).toHaveBeenCalledWith({
+        access_token: freshToken,
+        refresh_token: "rotated_refresh_999",
+      })
       expect(mockReplace).toHaveBeenCalledWith("/deliberation")
     })
   })
 
-  it("displays error card when server session hydration rejects token", async () => {
+  it("displays error card and preserves existing browser cookies when server session hydration rejects forged token", async () => {
     mockHydrateSessionAction.mockResolvedValueOnce({
       success: false,
       userId: null,
@@ -366,19 +367,88 @@ describe("AuthCallbackPage Component (app/auth/callback/page.tsx)", () => {
       error: "Invalid or unverified access token",
     })
 
-    const token = createTestJWT({
-      sub: "usr-citizen-42",
+    const writes: string[] = []
+    const cookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie")
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      get: () => "sb-proj-auth-token=existing_valid_session",
+      set: (val: string) => {
+        writes.push(val)
+      },
+    })
+
+    const forgedToken = createTestJWT({
+      sub: "usr-attacker-99",
       user_metadata: { is_human_verified: true },
     })
 
-    window.location.hash = `#access_token=${token}&refresh_token=refresh_123`
+    window.location.hash = `#access_token=${forgedToken}&refresh_token=forged_refresh`
+
+    try {
+      render(<AuthCallbackPage />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Authentication Incomplete/i)).toBeInTheDocument()
+        expect(screen.getByText(/Invalid or unverified access token/i)).toBeInTheDocument()
+        expect(mockReplace).not.toHaveBeenCalled()
+        expect(mockSetSession).not.toHaveBeenCalled()
+        expect(writes).toHaveLength(0)
+      })
+    } finally {
+      if (cookieDescriptor) {
+        Object.defineProperty(document, "cookie", cookieDescriptor)
+      }
+    }
+  })
+
+  it("exchanges PKCE code once and hydrates server and client sessions", async () => {
+    window.location.search = "?code=pkce_code_once_123&return_to=%2Fdeliberation"
 
     render(<AuthCallbackPage />)
 
     await waitFor(() => {
-      expect(screen.getByText(/Authentication Incomplete/i)).toBeInTheDocument()
-      expect(screen.getByText(/Invalid or unverified access token/i)).toBeInTheDocument()
-      expect(mockReplace).not.toHaveBeenCalled()
+      expect(mockExchangeCode).toHaveBeenCalledTimes(1)
+      expect(mockExchangeCode).toHaveBeenCalledWith("pkce_code_once_123")
+      expect(mockHydrateSessionAction).toHaveBeenCalledWith(
+        "code_access_token",
+        "code_refresh_token"
+      )
+      expect(mockSetSession).toHaveBeenCalledWith({
+        access_token: "code_access_token",
+        refresh_token: "code_refresh_token",
+      })
+      expect(mockReplace).toHaveBeenCalledWith("/deliberation")
     })
+  })
+
+  it("emits both host-only and apex-domain deletion cookies in setAllBrowserCookies on sign-out", async () => {
+    const actualClient = await vi.importActual<typeof import("@/lib/supabase/client")>(
+      "@/lib/supabase/client"
+    )
+    const writes: string[] = []
+    const cookieDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "cookie")
+    Object.defineProperty(document, "cookie", {
+      configurable: true,
+      get: () => "",
+      set: (val: string) => {
+        writes.push(val)
+      },
+    })
+
+    try {
+      actualClient.setAllBrowserCookies(
+        [{ name: "sb-proj-auth-token", value: "", options: { path: "/", maxAge: 0 } }],
+        "valerie.sunshade.icu"
+      )
+    } finally {
+      if (cookieDescriptor) {
+        Object.defineProperty(document, "cookie", cookieDescriptor)
+      }
+    }
+
+    expect(writes).toHaveLength(2)
+    expect(writes[0]).toContain("sb-proj-auth-token=; Path=/; Max-Age=0")
+    expect(writes[0]).not.toContain("domain=")
+    expect(writes[1]).toContain("sb-proj-auth-token=; Path=/; Max-Age=0; domain=.sunshade.icu")
   })
 })

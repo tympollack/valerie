@@ -41,7 +41,15 @@ export interface ProcessCallbackParams {
   persistServerSession: (
     accessToken: string,
     refreshToken?: string | null
-  ) => Promise<{ success: boolean; error?: string } | void>
+  ) => Promise<
+    | {
+        success: boolean
+        error?: string
+        accessToken?: string
+        refreshToken?: string | null
+      }
+    | void
+  >
 }
 
 export interface ProcessCallbackResult {
@@ -375,6 +383,38 @@ export async function processCallbackAuthentication({
 
   verifyAntiSybilClaim(activeAccessToken)
 
+  if (!persistServerSession) {
+    return {
+      success: false,
+      error: "Server session persistence handler is required to establish authentication",
+    }
+  }
+
+  // Verify and persist server session BEFORE mutating existing browser cookies
+  // so forged/failed callbacks never erase a visitor's active session.
+  try {
+    const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
+    if (serverRes && typeof serverRes === "object") {
+      if (!serverRes.success) {
+        return {
+          success: false,
+          error: serverRes.error || "Server session hydration failed",
+        }
+      }
+      if (serverRes.accessToken) {
+        activeAccessToken = serverRes.accessToken
+      }
+      if (serverRes.refreshToken !== undefined) {
+        activeRefreshToken = serverRes.refreshToken
+      }
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || "Failed to persist server session",
+    }
+  }
+
   clearBrowserSupabaseCookies(hostname)
 
   if (setSession) {
@@ -405,28 +445,6 @@ export async function processCallbackAuthentication({
     }
   } catch {
     // Browser environment safety guard
-  }
-
-  if (!persistServerSession) {
-    return {
-      success: false,
-      error: "Server session persistence handler is required to establish authentication",
-    }
-  }
-
-  try {
-    const serverRes = await persistServerSession(activeAccessToken, activeRefreshToken)
-    if (serverRes && typeof serverRes === "object" && !serverRes.success) {
-      return {
-        success: false,
-        error: serverRes.error || "Server session hydration failed",
-      }
-    }
-  } catch (err: any) {
-    return {
-      success: false,
-      error: err?.message || "Failed to persist server session",
-    }
   }
 
   return { success: true, destination: tokens.returnTo || "/deliberation" }

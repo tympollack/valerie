@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { type UserContext, signOutAction } from "@/app/actions/auth"
+import { clearBrowserSupabaseCookies } from "@/lib/auth/callback"
 import { createClient } from "@/lib/supabase/client"
 import { siteConfig } from "@/config/site"
 import { cn } from "@/lib/utils"
@@ -52,6 +53,9 @@ export function SettingsView({ userContext }: SettingsViewProps) {
         await supabase.auth.signOut()
       } catch {
         // Non-blocking
+      }
+      if (typeof window !== "undefined") {
+        clearBrowserSupabaseCookies(window.location.hostname)
       }
       await signOutAction()
       router.refresh()

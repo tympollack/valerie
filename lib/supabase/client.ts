@@ -23,35 +23,49 @@ function parseCookies(): { name: string; value: string }[] {
   });
 }
 
-function setAllCookies(
-  cookiesToSet: { name: string; value: string; options?: CookieOptions }[]
+export function setAllBrowserCookies(
+  cookiesToSet: { name: string; value: string; options?: CookieOptions }[],
+  hostnameOverride?: string
 ) {
   if (!isBrowser()) return;
 
   const isHttps = window.location.protocol === "https:";
-  const domainOpts = getCrossDomainCookieOptions(window.location.hostname);
+  const domainOpts = getCrossDomainCookieOptions(
+    hostnameOverride ?? window.location.hostname
+  );
 
   cookiesToSet.forEach(({ name, value, options = {} }) => {
     const encoded = encodeURIComponent(value);
-    const parts = [`${name}=${encoded}`];
+    const isDeletion =
+      value === "" ||
+      options.maxAge === 0 ||
+      (options.expires ? new Date(options.expires).getTime() <= Date.now() : false);
 
-    parts.push(`Path=${options.path || "/"}`);
-    if (typeof options.maxAge === "number") {
-      parts.push(`Max-Age=${options.maxAge}`);
-    }
-    if (options.expires) {
-      parts.push(`Expires=${new Date(options.expires).toUTCString()}`);
-    }
-    if (domainOpts.domain) {
-      parts.push(`domain=${domainOpts.domain}`);
-    }
+    const buildCookieString = (domain?: string) => {
+      const parts = [`${name}=${encoded}`, `Path=${options.path || "/"}`];
+      if (typeof options.maxAge === "number") {
+        parts.push(`Max-Age=${options.maxAge}`);
+      }
+      if (options.expires) {
+        parts.push(`Expires=${new Date(options.expires).toUTCString()}`);
+      }
+      if (domain) {
+        parts.push(`domain=${domain}`);
+      }
+      parts.push("SameSite=Lax");
+      if (isHttps) {
+        parts.push("Secure");
+      }
+      return parts.join("; ");
+    };
 
-    parts.push("SameSite=Lax");
-    if (isHttps) {
-      parts.push("Secure");
+    if (isDeletion && domainOpts.domain) {
+      // Expire both legacy host-only and apex-domain cookies so old sessions cannot survive sign-out
+      document.cookie = buildCookieString(undefined);
+      document.cookie = buildCookieString(domainOpts.domain);
+    } else {
+      document.cookie = buildCookieString(domainOpts.domain);
     }
-
-    document.cookie = parts.join("; ");
   });
 }
 
@@ -84,6 +98,10 @@ export function createClient() {
     supabaseUrl ?? "http://127.0.0.1:54321",
     supabaseAnonKey ?? "local-anon-key-placeholder",
     {
+      auth: {
+        // Explicit callback handling in /auth/callback prevents auto-exchanging PKCE codes twice
+        detectSessionInUrl: false,
+      },
       cookieOptions: {
         path: "/",
         ...(domainOpts.domain ? { domain: domainOpts.domain } : {}),
@@ -92,7 +110,9 @@ export function createClient() {
       },
       cookies: {
         getAll: parseCookies,
-        setAll: setAllCookies,
+        setAll: (
+          cookiesToSet: { name: string; value: string; options?: CookieOptions }[]
+        ) => setAllBrowserCookies(cookiesToSet),
       },
     }
   );

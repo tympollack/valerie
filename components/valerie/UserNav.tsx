@@ -24,6 +24,7 @@ import {
 } from "lucide-react"
 import { type UserContext, signOutAction, revalidateUserContextAction } from "@/app/actions/auth"
 import { useAuth } from "@/components/auth/AuthProvider"
+import { clearBrowserSupabaseCookies } from "@/lib/auth/callback"
 import { createClient } from "@/lib/supabase/client"
 import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
@@ -101,8 +102,9 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
     }
   }, [])
 
-  // Sync verification status on tab focus or visibilitychange when returning from SunShade Hub
+  // Sync verification status on tab focus or visibilitychange when rendered standalone (outside AuthProvider)
   useEffect(() => {
+    if (authContext) return
     const handleSync = async () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return
       if (!userContext.authenticated || userContext.isHumanVerified) return
@@ -163,7 +165,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
         document.removeEventListener("visibilitychange", handleSync)
       }
     }
-  }, [userContext.authenticated, userContext.isHumanVerified, router])
+  }, [authContext, userContext.authenticated, userContext.isHumanVerified, router])
 
   // Listen to client-side auth state changes for real-time reactivity
   useEffect(() => {
@@ -236,6 +238,9 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
         await supabase.auth.signOut()
       } catch {
         // Non-blocking
+      }
+      if (typeof window !== "undefined") {
+        clearBrowserSupabaseCookies(window.location.hostname)
       }
       setUserContext({
         authenticated: false,
