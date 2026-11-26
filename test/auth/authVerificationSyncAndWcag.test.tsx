@@ -7,6 +7,7 @@ import { UserMenu } from "@/components/navigation/UserMenu"
 import { Header } from "@/components/nav/Header"
 import { SettingsView } from "@/components/valerie/SettingsView"
 import { BivariatePollCard } from "@/components/valerie/BivariatePollCard"
+import { usePollAuth } from "@/hooks/usePollAuth"
 import type { UserContext } from "@/app/actions/auth"
 
 // Mock next/navigation
@@ -60,6 +61,7 @@ const mockGetUser = vi.fn().mockResolvedValue({ data: { user: null }, error: nul
 const mockSetSession = vi.fn().mockResolvedValue({ data: { session: null }, error: null })
 const mockRpc = vi.fn().mockResolvedValue({ data: false, error: null })
 let authCallback: ((event: string, session: any) => void) | null = null
+const authCallbacks: Array<(event: string, session: any) => void> = []
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -71,9 +73,13 @@ vi.mock("@/lib/supabase/client", () => ({
       getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
       onAuthStateChange: vi.fn((cb) => {
         authCallback = cb
+        authCallbacks.push(cb)
         return { data: { subscription: { unsubscribe: vi.fn() } } }
       }),
     },
+    schema: () => ({
+      rpc: mockRpc,
+    }),
     rpc: mockRpc,
   }),
 }))
@@ -81,6 +87,8 @@ vi.mock("@/lib/supabase/client", () => ({
 describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authCallback = null
+    authCallbacks.length = 0
   })
 
   it("AuthProvider refreshes session and queries authoritative RPC on window focus", async () => {
@@ -278,6 +286,57 @@ describe("TASK-VAL-HUB-VERIFY-SYNC: Hub Verification Session Sync", () => {
 
     expect(mockRefreshSession).toHaveBeenCalledTimes(1)
     expect(mockRevalidateUserContextAction).toHaveBeenCalledTimes(1)
+  })
+
+  it("propagates RPC-only verification from UserNav to usePollAuth without page reload", async () => {
+    const initialUnverified: UserContext = {
+      authenticated: true,
+      userId: "usr-rpc-sync-1",
+      email: "voter@sunshade.icu",
+      displayName: "Voter One",
+      isHumanVerified: false,
+      verificationTier: "UNVERIFIED",
+      trustState: "active",
+    }
+
+    mockRpc.mockResolvedValue({ data: true, error: null })
+
+    function PollAuthConsumer({ pageCtx }: { pageCtx: UserContext }) {
+      const resolved = usePollAuth(pageCtx)
+      return (
+        <span data-testid="poll-auth-verified">
+          {resolved?.isHumanVerified ? "CAN_VOTE" : "NEEDS_VERIFY"}
+        </span>
+      )
+    }
+
+    render(
+      <AuthProvider initialUserContext={initialUnverified}>
+        <UserNav initialUserContext={initialUnverified} />
+        <PollAuthConsumer pageCtx={initialUnverified} />
+      </AuthProvider>
+    )
+
+    expect(screen.getByTestId("poll-auth-verified")).toHaveTextContent("NEEDS_VERIFY")
+    expect(authCallbacks.length).toBeGreaterThanOrEqual(2)
+
+    await act(async () => {
+      for (const cb of authCallbacks) {
+        cb("SIGNED_IN", {
+          user: {
+            id: "usr-rpc-sync-1",
+            email: "voter@sunshade.icu",
+            app_metadata: { is_human: false, verification_tier: "UNVERIFIED", trust_state: "active" },
+            user_metadata: { display_name: "Voter One" },
+          },
+        })
+      }
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("poll-auth-verified")).toHaveTextContent("CAN_VOTE")
+    })
   })
 })
 

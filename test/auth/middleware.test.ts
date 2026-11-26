@@ -91,9 +91,10 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       expect(isVotingRoute("/api/vote")).toBe(true);
     });
 
-    it("identifies server actions targeting polls", () => {
+    it("identifies voting subroutes on polls while leaving poll Server Actions unblocked for sign-out", () => {
       const headers = new Headers({ "next-action": "action_id_123" });
-      expect(isVotingRoute("/polls/123", "POST", headers)).toBe(true);
+      expect(isVotingRoute("/polls/123/vote", "POST", headers)).toBe(true);
+      expect(isVotingRoute("/polls/123", "POST", headers)).toBe(false);
     });
 
     it("allows non-voting paths", () => {
@@ -277,17 +278,72 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
       expect(res.status).toBe(401);
     });
 
-    it("permits Server Action POST to /polls/[id] when RPC verifies an unverified-claim session", async () => {
+    it("permits voting routes when RPC verifies an access-only SSO session whose bearer token is forwarded", async () => {
       const origUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const origKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
       const rpcSpy = vi.fn(async () => ({ data: true, error: null }));
+      const capturedOptions: any[] = [];
+      mockCreateServerClientOverride.fn = (_url: string, _key: string, options: any) => {
+        capturedOptions.push(options);
+        return {
+          auth: {
+            getUser: vi.fn(async (token?: string) => {
+              if (!token) {
+                return { data: { user: null }, error: new Error("No SSR cookie session") };
+              }
+              return {
+                data: {
+                  user: {
+                    id: "user-rpc-verified-1",
+                    app_metadata: { is_human: false, verification_tier: "UNVERIFIED", trust_state: "active" },
+                    user_metadata: {},
+                  },
+                },
+                error: null,
+              };
+            }),
+          },
+          schema: vi.fn(() => ({ rpc: rpcSpy })),
+        };
+      };
+
+      try {
+        process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
+
+        const req = new NextRequest("https://valerie.sunshade.icu/polls/poll-123/vote", {
+          method: "POST",
+          headers: {
+            cookie: `sunshade_sso=${unverifiedBotJWT}`,
+            "next-action": "action_submit_vote",
+          },
+        });
+
+        const res = await updateSession(req);
+        expect(res.status).toBe(200);
+        expect(rpcSpy).toHaveBeenCalledWith("is_human_verified", {
+          p_user_id: "user-rpc-verified-1",
+        });
+        expect(capturedOptions[1]?.global?.headers?.Authorization).toBe(`Bearer ${unverifiedBotJWT}`);
+        expect(req.headers.get("x-is-human-verified")).toBe("true");
+      } finally {
+        mockCreateServerClientOverride.fn = null;
+        process.env.NEXT_PUBLIC_SUPABASE_URL = origUrl;
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = origKey;
+      }
+    });
+
+    it("allows Server Action POST on /polls/[id] (e.g. signOutAction) even when verification was revoked via RPC", async () => {
+      const origUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const origKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      const rpcSpy = vi.fn(async () => ({ data: false, error: null }));
       mockCreateServerClientOverride.fn = () => ({
         auth: {
           getUser: vi.fn(async () => ({
             data: {
               user: {
-                id: "user-rpc-verified-1",
-                app_metadata: { is_human: false, verification_tier: "UNVERIFIED", trust_state: "active" },
+                id: "user-revoked-1",
+                app_metadata: { is_human: true, verification_tier: "ANCHOR", trust_state: "active" },
                 user_metadata: {},
               },
             },
@@ -301,20 +357,16 @@ describe("Middleware SSO Handshake & Anti-Sybil Route Protection", () => {
         process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
 
-        const req = new NextRequest("https://valerie.sunshade.icu/polls/poll-123", {
+        const signOutReq = new NextRequest("https://valerie.sunshade.icu/polls/poll-123", {
           method: "POST",
           headers: {
-            cookie: `sunshade_sso=${unverifiedBotJWT}`,
-            "next-action": "action_submit_vote",
+            cookie: `sunshade_sso=${verifiedHumanJWT}`,
+            "next-action": "action_sign_out",
           },
         });
 
-        const res = await updateSession(req);
-        expect(res.status).toBe(200);
-        expect(rpcSpy).toHaveBeenCalledWith("is_human_verified", {
-          p_user_id: "user-rpc-verified-1",
-        });
-        expect(req.headers.get("x-is-human-verified")).toBe("true");
+        const signOutRes = await updateSession(signOutReq);
+        expect(signOutRes.status).toBe(200);
       } finally {
         mockCreateServerClientOverride.fn = null;
         process.env.NEXT_PUBLIC_SUPABASE_URL = origUrl;

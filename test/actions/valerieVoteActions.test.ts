@@ -346,4 +346,41 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     });
     expect(capturedInsertPayload.user_id).toBe("usr-rpc-only-voter");
   });
+
+  it("rejects vote submission immediately when RPC reports revoked verification despite verified JWT claims", async () => {
+    mockUser = {
+      id: "usr-revoked-voter",
+      app_metadata: {
+        is_human: true,
+        anti_sybil_verified: true,
+        verification_tier: "ANCHOR",
+        trust_state: "active",
+      },
+      user_metadata: {},
+    };
+    const rpcSpy = vi.fn(async () => ({ data: false, error: null }));
+    const { createClient } = await import("@/lib/supabase/server");
+    vi.mocked(createClient).mockResolvedValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({ data: { user: mockUser }, error: null })),
+      },
+      schema: vi.fn(() => ({
+        from: mockFrom,
+        rpc: rpcSpy,
+      })),
+      functions: {
+        invoke: mockInvoke,
+      },
+    } as any);
+
+    const result = await castVote({
+      pollId: "poll-uuid-revoked",
+      likertScore: 1,
+      confidenceScore: 70,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/verification required/i);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
 });
