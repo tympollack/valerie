@@ -673,16 +673,14 @@ export function getUserContextFromHeaders(headers: { get: (name: string) => stri
 /**
  * Determines whether a pathname or request is a protected voting route.
  */
-export function isVotingRoute(pathname: string, method: string = "GET", headers?: { get: (name: string) => string | null }): boolean {
+export function isVotingRoute(pathname: string, _method: string = "GET", _headers?: { get: (name: string) => string | null }): boolean {
   const normalized = pathname.toLowerCase();
-  const isVotePath =
+  return (
     normalized.startsWith("/vote") ||
     normalized.startsWith("/voting") ||
     normalized.includes("/vote") ||
-    normalized.startsWith("/api/vote");
-
-  const isServerAction = Boolean(headers?.get("next-action"));
-  return isVotePath || (isServerAction && normalized.startsWith("/polls"));
+    normalized.startsWith("/api/vote")
+  );
 }
 
 /**

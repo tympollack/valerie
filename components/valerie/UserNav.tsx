@@ -199,28 +199,43 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             Boolean(prevUserIdRef.current) && prevUserIdRef.current !== session.user.id
           prevUserIdRef.current = session.user.id
 
-          setUserContext((prev) => ({
+          const baseUserState: Omit<UserContext, "isHumanVerified"> = {
             authenticated: true,
             userId: session.user.id,
             email,
             displayName,
+            verificationTier: freshProof.verificationTier,
+            trustState: freshProof.trustState,
+            nullifierHash: freshProof.nullifierHash,
+            provider: freshProof.provider,
+            score: freshProof.score,
+          }
+
+          const mergeUserState = (prev: UserContext): UserContext => ({
+            ...baseUserState,
             isHumanVerified:
               claimVerified ||
               (!isDifferentUser &&
                 prev.userId === session.user.id &&
                 prev.isHumanVerified &&
                 freshProof.trustState === "active"),
-            verificationTier: freshProof.verificationTier,
-            trustState: freshProof.trustState,
-            nullifierHash: freshProof.nullifierHash,
-            provider: freshProof.provider,
-            score: freshProof.score,
-          }))
+          })
+
+          setUserContext(mergeUserState)
+
+          if (authContext?.setUserContext) {
+            authContext.setUserContext(mergeUserState)
+          }
 
           if (!claimVerified && freshProof.trustState === "active") {
             void checkHumanVerifiedRpc(supabase, session.user.id).then((rpcVerified) => {
               if (rpcVerified === true) {
                 setUserContext((prev) =>
+                  prev.userId === session.user.id
+                    ? { ...prev, isHumanVerified: true }
+                    : prev
+                )
+                authContext?.setUserContext((prev) =>
                   prev.userId === session.user.id
                     ? { ...prev, isHumanVerified: true }
                     : prev

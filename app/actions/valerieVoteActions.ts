@@ -124,10 +124,12 @@ export async function submitVote(payload: VotePayload): Promise<VoteResult> {
         userMetadata.is_human_verified === true
     );
 
-    if (!isHumanVerified && antiSybilProof.trustState === "active") {
+    if (antiSybilProof.trustState === "active") {
       const rpcVerified = await checkHumanVerifiedRpc(supabase, user.id);
       if (rpcVerified === true) {
         isHumanVerified = true;
+      } else if (rpcVerified === false) {
+        isHumanVerified = false;
       }
     }
 
