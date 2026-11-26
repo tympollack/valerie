@@ -56,6 +56,7 @@ export interface SSOTokenPayload {
   iat?: number;
   app_metadata?: {
     is_human?: boolean;
+    is_human_verified?: boolean;
     anti_sybil_verified?: boolean;
     verification_tier?: VerificationTier;
     trust_state?: TrustState;
@@ -303,17 +304,21 @@ export function extractAntiSybilProof(userOrPayload: unknown): AntiSybilProof {
     "UNVERIFIED"
   ) as VerificationTier;
 
-  // Extract explicit human flags
+  // Extract explicit human flags (strictly ignoring userMeta.is_human_verified)
   const isHumanFlag = Boolean(
     appMeta.is_human === true ||
+      appMeta.is_human_verified === true ||
       record.is_human === true ||
+      record.is_human_verified === true ||
       userMeta.is_human === true ||
       TRUSTED_VERIFIED_TIERS.has(String(verificationTier).toUpperCase())
   );
 
   const isAntiSybilFlag = Boolean(
     appMeta.anti_sybil_verified === true ||
+      appMeta.is_human_verified === true ||
       record.anti_sybil_verified === true ||
+      record.is_human_verified === true ||
       userMeta.anti_sybil_verified === true ||
       TRUSTED_VERIFIED_TIERS.has(String(verificationTier).toUpperCase())
   );
@@ -381,6 +386,49 @@ export function extractAntiSybilProof(userOrPayload: unknown): AntiSybilProof {
 
 export const extractVerificationProof = extractAntiSybilProof;
 export const extractHumanProof = extractAntiSybilProof;
+
+/**
+ * Calls valerie.is_human_verified(p_user_id) via schema-qualified Supabase RPC,
+ * falling back to an unqualified rpc() only for minimal test doubles without .schema().
+ */
+export async function checkHumanVerifiedRpc(
+  supabase: unknown,
+  userId: string
+): Promise<boolean | null> {
+  try {
+    const client = supabase as {
+      schema?: (name: string) => {
+        rpc?: (
+          fn: string,
+          params: Record<string, unknown>
+        ) => Promise<{ data: unknown; error: unknown }>;
+      };
+      rpc?: (
+        fn: string,
+        params: Record<string, unknown>
+      ) => Promise<{ data: unknown; error: unknown }>;
+    };
+    const schemaClient =
+      typeof client?.schema === "function" ? client.schema("valerie") : null;
+    const rpcCaller =
+      typeof schemaClient?.rpc === "function" ? schemaClient : client;
+
+    if (typeof rpcCaller?.rpc !== "function") {
+      return null;
+    }
+
+    const { data: rpcRes, error: rpcErr } = await rpcCaller.rpc(
+      "is_human_verified",
+      { p_user_id: userId }
+    );
+    if (!rpcErr && typeof rpcRes === "boolean") {
+      return rpcRes;
+    }
+  } catch {
+    // Non-blocking fallback when RPC is unavailable
+  }
+  return null;
+}
 
 // =============================================================================
 // Cryptographic SSO Token Verification

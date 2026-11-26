@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   getCrossDomainCookieOptions,
   extractAntiSybilProof,
+  checkHumanVerifiedRpc,
   extractSSOToken,
   validateSSOHandshake,
   isVotingRoute,
@@ -40,6 +41,7 @@ export async function updateSession(request: NextRequest) {
   let isHumanVerified = false;
   let verificationTier: VerificationTier = "UNVERIFIED";
   let trustState: TrustState = "active";
+  let rpcClient: ReturnType<typeof createServerClient> | null = null;
 
   const isSupabaseAuthCookie = (name: string) =>
     name.startsWith("sb-") && name.includes("-auth-token");
@@ -94,6 +96,7 @@ export async function updateSession(request: NextRequest) {
       let resolvedUser = null;
       if (!error && user) {
         resolvedUser = user;
+        rpcClient = supabase;
       } else {
         // Fallback for access-only SSO sessions lacking native refresh token cookie
         const ssoToken = extractSSOToken(request.cookies);
@@ -101,6 +104,17 @@ export async function updateSession(request: NextRequest) {
           const { data: ssoData, error: ssoError } = await supabase.auth.getUser(ssoToken);
           if (!ssoError && ssoData?.user) {
             resolvedUser = ssoData.user;
+            rpcClient = createServerClient(supabaseUrl, supabaseKey, {
+              cookies: {
+                getAll() {
+                  return request.cookies.getAll();
+                },
+                setAll() {},
+              },
+              global: {
+                headers: { Authorization: `Bearer ${ssoToken}` },
+              },
+            });
           }
         }
       }
@@ -146,6 +160,18 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
+  // Authoritative RPC verification check on protected voting routes (supports RPC-only approvals & immediate revocation)
+  const pathname = request.nextUrl.pathname;
+  const isProtectedVotingRoute = isVotingRoute(pathname, request.method, request.headers);
+  if (isProtectedVotingRoute && userId && rpcClient) {
+    const rpcVerified = await checkHumanVerifiedRpc(rpcClient, userId);
+    if (rpcVerified === true && trustState === "active") {
+      isHumanVerified = true;
+    } else if (rpcVerified === false) {
+      isHumanVerified = false;
+    }
+  }
+
   // 3. Inject Verified User Context into Request Headers for Server Actions & Components
   if (userId) {
     requestHeaders.set("x-user-id", userId);
@@ -178,8 +204,7 @@ export async function updateSession(request: NextRequest) {
   }
 
   // 4. Protected Voting Routes & Actions Gate
-  const pathname = request.nextUrl.pathname;
-  if (isVotingRoute(pathname, request.method, request.headers)) {
+  if (isProtectedVotingRoute) {
     const isApiOrAction =
       request.method !== "GET" ||
       request.headers.has("next-action") ||

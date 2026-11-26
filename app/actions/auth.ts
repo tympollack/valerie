@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import {
   decodeJWT,
   extractAntiSybilProof,
+  checkHumanVerifiedRpc,
   extractSSOToken,
   SUNSHADE_COOKIE_NAMES,
   getCrossDomainCookieOptions,
@@ -66,16 +67,9 @@ const resolveCurrentUserContext = cache(async (): Promise<UserContext> => {
         let isHumanVerified = proof.isHuman && proof.trustState === "active"
 
         // Authoritative Hub profile verification RPC check
-        try {
-          const { data: rpcRes, error: rpcErr } = await supabase.rpc(
-            "is_human_verified",
-            { p_user_id: resolvedUser.id }
-          )
-          if (!rpcErr && typeof rpcRes === "boolean") {
-            isHumanVerified = rpcRes && proof.trustState === "active"
-          }
-        } catch {
-          // Non-blocking fallback to extracted proof
+        const rpcVerified = await checkHumanVerifiedRpc(supabase, resolvedUser.id)
+        if (typeof rpcVerified === "boolean") {
+          isHumanVerified = rpcVerified && proof.trustState === "active"
         }
 
         const email = resolvedUser.email || null
