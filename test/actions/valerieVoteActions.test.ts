@@ -308,4 +308,79 @@ describe("valerieVoteActions (submitVote & castVote)", () => {
     expect(result.success).toBe(true);
     expect(capturedInsertPayload.user_id).toBe("usr-bearer-token-99");
   });
+
+  it("allows vote submission when JWT claims are unverified but valerie.is_human_verified RPC returns true", async () => {
+    mockUser = {
+      id: "usr-rpc-only-voter",
+      app_metadata: {
+        is_human: false,
+        verification_tier: "UNVERIFIED",
+        trust_state: "active",
+      },
+      user_metadata: {},
+    };
+    const rpcSpy = vi.fn(async () => ({ data: true, error: null }));
+    const { createClient } = await import("@/lib/supabase/server");
+    vi.mocked(createClient).mockResolvedValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({ data: { user: mockUser }, error: null })),
+      },
+      schema: vi.fn(() => ({
+        from: mockFrom,
+        rpc: rpcSpy,
+      })),
+      functions: {
+        invoke: mockInvoke,
+      },
+    } as any);
+
+    const result = await castVote({
+      pollId: "poll-uuid-rpc",
+      likertScore: 2,
+      confidenceScore: 90,
+    });
+
+    expect(result.success).toBe(true);
+    expect(rpcSpy).toHaveBeenCalledWith("is_human_verified", {
+      p_user_id: "usr-rpc-only-voter",
+    });
+    expect(capturedInsertPayload.user_id).toBe("usr-rpc-only-voter");
+  });
+
+  it("rejects vote submission immediately when RPC reports revoked verification despite verified JWT claims", async () => {
+    mockUser = {
+      id: "usr-revoked-voter",
+      app_metadata: {
+        is_human: true,
+        anti_sybil_verified: true,
+        verification_tier: "ANCHOR",
+        trust_state: "active",
+      },
+      user_metadata: {},
+    };
+    const rpcSpy = vi.fn(async () => ({ data: false, error: null }));
+    const { createClient } = await import("@/lib/supabase/server");
+    vi.mocked(createClient).mockResolvedValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({ data: { user: mockUser }, error: null })),
+      },
+      schema: vi.fn(() => ({
+        from: mockFrom,
+        rpc: rpcSpy,
+      })),
+      functions: {
+        invoke: mockInvoke,
+      },
+    } as any);
+
+    const result = await castVote({
+      pollId: "poll-uuid-revoked",
+      likertScore: 1,
+      confidenceScore: 70,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/verification required/i);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
 });

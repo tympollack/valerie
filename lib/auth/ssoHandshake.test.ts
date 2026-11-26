@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   extractSSOToken,
   getCrossDomainCookieOptions,
   extractAntiSybilProof,
+  checkHumanVerifiedRpc,
   verifySSOToken,
   validateSSOHandshake,
   buildSSOLoginRedirect,
@@ -343,6 +344,33 @@ describe("Cross-Domain SSO & Cookie Parsing (lib/auth/ssoHandshake.ts)", () => {
         getAll: () => [{ name: "sunshade_sso", value: token }],
       };
       expect(extractSSOToken(cookieStore)).toBe(token);
+    });
+  });
+
+  describe("app_metadata.is_human_verified & valerie.is_human_verified RPC", () => {
+    it("recognizes trusted app_metadata.is_human_verified while ignoring user_metadata spoofing", () => {
+      const trusted = extractAntiSybilProof({
+        sub: "usr-app-verified",
+        app_metadata: { is_human_verified: true, trust_state: "active" },
+      });
+      expect(trusted.isHuman).toBe(true);
+
+      const spoofed = extractAntiSybilProof({
+        sub: "usr-spoofed",
+        user_metadata: { is_human_verified: true },
+        app_metadata: { trust_state: "active" },
+      });
+      expect(spoofed.isHuman).toBe(false);
+    });
+
+    it("queries valerie.is_human_verified via schema-qualified Supabase RPC when .schema is available", async () => {
+      const rpcSpy = vi.fn().mockResolvedValue({ data: true, error: null });
+      const schemaSpy = vi.fn().mockReturnValue({ rpc: rpcSpy });
+
+      const result = await checkHumanVerifiedRpc({ schema: schemaSpy }, "usr-rpc-1");
+      expect(schemaSpy).toHaveBeenCalledWith("valerie");
+      expect(rpcSpy).toHaveBeenCalledWith("is_human_verified", { p_user_id: "usr-rpc-1" });
+      expect(result).toBe(true);
     });
   });
 });

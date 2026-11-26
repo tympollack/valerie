@@ -26,7 +26,7 @@ import { type UserContext, signOutAction, revalidateUserContextAction } from "@/
 import { useAuth } from "@/components/auth/AuthProvider"
 import { clearBrowserSupabaseCookies } from "@/lib/auth/callback"
 import { createClient } from "@/lib/supabase/client"
-import { extractVerificationProof } from "@/lib/auth/ssoHandshake"
+import { extractVerificationProof, checkHumanVerifiedRpc } from "@/lib/auth/ssoHandshake"
 import { cn } from "@/lib/utils"
 
 interface UserNavProps {
@@ -120,15 +120,10 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
         if (user) {
           const freshProof = extractVerificationProof(user)
 
-          try {
-            const { data: rpcRes, error: rpcErr } = await supabase.rpc(
-              "is_human_verified",
-              { p_user_id: user.id }
-            )
-            if (!rpcErr && typeof rpcRes === "boolean") {
-              isVerified = rpcRes && freshProof.trustState === "active"
-            }
-          } catch {}
+          const rpcVerified = await checkHumanVerifiedRpc(supabase, user.id)
+          if (typeof rpcVerified === "boolean") {
+            isVerified = rpcVerified && freshProof.trustState === "active"
+          }
 
           if (freshProof.isHuman && freshProof.trustState === "active") {
             isVerified = true
@@ -173,7 +168,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
       const supabase = createClient()
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event, session) => {
+      } = supabase.auth.onAuthStateChange((event, session) => {
         // Only clear user context on explicit SIGNED_OUT event.
         // For SSO-only visitors, the client-side Supabase instance initially receives
         // a null browser session (INITIAL_SESSION) while server-side context is already
@@ -192,7 +187,7 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
           })
         } else if (session?.user) {
           const freshProof = extractVerificationProof(session.user)
-          const isHumanVerified = freshProof.isHuman && freshProof.trustState === "active"
+          const claimVerified = freshProof.isHuman && freshProof.trustState === "active"
           const email = session.user.email || null
           const displayName =
             (session.user.user_metadata?.full_name as string) ||
@@ -204,18 +199,50 @@ export function UserNav({ initialUserContext, className }: UserNavProps) {
             Boolean(prevUserIdRef.current) && prevUserIdRef.current !== session.user.id
           prevUserIdRef.current = session.user.id
 
-          setUserContext({
+          const baseUserState: Omit<UserContext, "isHumanVerified"> = {
             authenticated: true,
             userId: session.user.id,
             email,
             displayName,
-            isHumanVerified,
             verificationTier: freshProof.verificationTier,
             trustState: freshProof.trustState,
             nullifierHash: freshProof.nullifierHash,
             provider: freshProof.provider,
             score: freshProof.score,
+          }
+
+          const mergeUserState = (prev: UserContext): UserContext => ({
+            ...baseUserState,
+            isHumanVerified:
+              claimVerified ||
+              (!isDifferentUser &&
+                prev.userId === session.user.id &&
+                prev.isHumanVerified &&
+                freshProof.trustState === "active"),
           })
+
+          setUserContext(mergeUserState)
+
+          if (authContext?.setUserContext) {
+            authContext.setUserContext(mergeUserState)
+          }
+
+          if (!claimVerified && freshProof.trustState === "active") {
+            void checkHumanVerifiedRpc(supabase, session.user.id).then((rpcVerified) => {
+              if (rpcVerified === true) {
+                setUserContext((prev) =>
+                  prev.userId === session.user.id
+                    ? { ...prev, isHumanVerified: true }
+                    : prev
+                )
+                authContext?.setUserContext((prev) =>
+                  prev.userId === session.user.id
+                    ? { ...prev, isHumanVerified: true }
+                    : prev
+                )
+              }
+            })
+          }
 
           if (isDifferentUser) {
             router.refresh()

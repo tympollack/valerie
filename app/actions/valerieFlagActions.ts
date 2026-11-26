@@ -13,7 +13,11 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { extractAntiSybilProof, extractSSOToken } from "@/lib/auth/ssoHandshake";
+import {
+  extractAntiSybilProof,
+  checkHumanVerifiedRpc,
+  extractSSOToken,
+} from "@/lib/auth/ssoHandshake";
 import {
   generateEmbedding,
   generateDeterministicEmbedding,
@@ -209,7 +213,7 @@ export async function evaluateFlagConsensusAsync(pollId: string): Promise<string
  * Satisfies the 24-hour Commit-and-Reveal gate and triggers cross-spectrum consensus evaluations.
  */
 export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<FlagPollResult> {
-  const supabase = await createClient();
+  let supabase = await createClient();
 
   // 1. Session & Anti-Sybil human verification check
   let {
@@ -225,6 +229,7 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
       if (!ssoError && ssoData?.user) {
         user = ssoData.user;
         authError = null;
+        supabase = await createClient(ssoToken);
       }
     }
   }
@@ -240,12 +245,21 @@ export async function flagPollWithCommitGate(payload: FlagPollPayload): Promise<
   const userAppMeta = (user.app_metadata as Record<string, unknown>) || {};
   const userMetadata = (user.user_metadata as Record<string, unknown>) || {};
 
-  const isHumanVerified = Boolean(
+  let isHumanVerified = Boolean(
     antiSybilProof.isHuman ||
       antiSybilProof.antiSybilVerified ||
       userAppMeta.is_human_verified === true ||
       userMetadata.is_human_verified === true
   );
+
+  if (antiSybilProof.trustState === "active") {
+    const rpcVerified = await checkHumanVerifiedRpc(supabase, user.id);
+    if (rpcVerified === true) {
+      isHumanVerified = true;
+    } else if (rpcVerified === false) {
+      isHumanVerified = false;
+    }
+  }
 
   if (!isHumanVerified || antiSybilProof.trustState !== "active") {
     return {
