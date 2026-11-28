@@ -26,6 +26,7 @@ import {
   VECTOR_DIM,
 } from "@/lib/ai/embedding";
 import { resolveVoterLocale, type ResolvedVoterLocale } from "@/lib/geo/resolveVoterLocale";
+import { VALID_FLAG_REASONS } from "@/lib/valerie/flagConstants";
 import { revalidatePath } from "next/cache";
 import { cookies, headers } from "next/headers";
 
@@ -38,13 +39,6 @@ export type FlagReason =
   | "FALSE_DICHOTOMY"
   | "DISPUTED_PREMISE"
   | "LOCALE_MISMATCH";
-
-export const VALID_FLAG_REASONS: readonly FlagReason[] = [
-  "LOADED_FRAMING",
-  "FALSE_DICHOTOMY",
-  "DISPUTED_PREMISE",
-  "LOCALE_MISMATCH",
-] as const;
 
 export interface FlagPollPayload {
   pollId: string;

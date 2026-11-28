@@ -13,7 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 
 export type LocaleGranularity = "LOCAL" | "STATE" | "NATIONAL" | "GLOBAL";
 
-export const VALID_GRANULARITIES: readonly LocaleGranularity[] = [
+const VALID_GRANULARITIES: readonly LocaleGranularity[] = [
   "LOCAL",
   "STATE",
   "NATIONAL",
