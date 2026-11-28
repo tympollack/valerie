@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { getClusterLineage } from "@/app/actions/valerieClusterActions";
 import {
   sanitizeClusterNode,
   buildNestedClusterTree,
-  getClusterLineage,
   type ClusterLineageNode,
-} from "@/app/actions/valerieClusterActions";
+} from "@/lib/valerie/clusterTree";
 
 // Mock next/cache unstable_cache to execute the handler directly
 vi.mock("next/cache", () => ({

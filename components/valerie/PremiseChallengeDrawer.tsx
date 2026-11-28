@@ -6,7 +6,7 @@ import { Flag, X, AlertTriangle, MessageSquare, ShieldAlert } from "lucide-react
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { type FlagReason, VALID_FLAG_REASONS } from "@/app/actions/valerieFlagActions"
+import { type FlagReason, VALID_FLAG_REASONS } from "@/lib/valerie/flagConstants"
 import { cn } from "@/lib/utils"
 
 export interface PremiseChallengeDrawerProps {

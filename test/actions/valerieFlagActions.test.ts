@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   flagPollWithCommitGate,
-  VALID_FLAG_REASONS,
   resolveCoarseLocaleBuckets,
   resolveUserThetaVector,
 } from "@/app/actions/valerieFlagActions";
+import { VALID_FLAG_REASONS } from "@/lib/valerie/flagConstants";
 import { VECTOR_DIM, parseVectorSafely } from "@/lib/ai/embedding";
 
 // Mock next/headers

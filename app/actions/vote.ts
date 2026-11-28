@@ -14,8 +14,6 @@ import {
   type VoteResult,
 } from "./valerieVoteActions";
 
-export type { VotePayload, VoteResult };
-
 export async function submitVote(payload: VotePayload): Promise<VoteResult> {
   try {
     return await executeSubmitVote(payload);
